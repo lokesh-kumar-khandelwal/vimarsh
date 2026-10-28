@@ -34,6 +34,7 @@ import {
   SessionStore,
 } from '../../engine/sessionStore';
 import { validateSqlStatic } from '../../engine/sqlValidator';
+import { SYSTEM_PROMPT_TEMPLATE } from '../../engine/systemPrompt';
 import type {
   ConversationTurn,
   DryRunResult,
@@ -424,6 +425,62 @@ export function runRequestBuilderContractTestCases(
           passed:
             remainingBraces === null && hasToday && hasDialect && hasGlossary,
           details: `unfilledPlaceholders=${remainingBraces ? remainingBraces.join(',') : '0'}, length=${built.length}`,
+        };
+      },
+    },
+    {
+      id: 'req_04_no_stale_example_dates_and_dynamic_date_helpers',
+      name: 'SYSTEM_PROMPT_TEMPLATE contains zero hardcoded YYYY-MM-DD dates and buildSystemPrompt injects dynamic date helpers across different dates',
+      run: () => {
+        const staticDates = SYSTEM_PROMPT_TEMPLATE.match(/\b\d{4}-\d{2}-\d{2}\b/g);
+        const expectedPlaceholders = [
+          '{{CURRENT_DATE}}',
+          '{{DATE_HELPERS}}',
+          '{{DB_DIALECT}}',
+          '{{SCHEMA}}',
+          '{{ENUM_VALUES}}',
+          '{{GLOSSARY}}',
+          '{{SENSITIVE_COLUMNS}}',
+        ];
+        const templatePlaceholders = Array.from(
+          new Set(SYSTEM_PROMPT_TEMPLATE.match(/\{\{[A-Z_]+\}\}/g) ?? [])
+        );
+        const exactSevenPlaceholders =
+          templatePlaceholders.length === 7 &&
+          expectedPlaceholders.every((p) => templatePlaceholders.includes(p));
+
+        const builtJan2026 = buildSystemPrompt(
+          schemaContext,
+          new Date(2026, 0, 15, 12, 0, 0)
+        );
+        const builtJun2027 = buildSystemPrompt(
+          schemaContext,
+          new Date(2027, 5, 10, 12, 0, 0)
+        );
+
+        const janHelpersOk =
+          builtJan2026.includes('Today\'s date: 2026-01-15') &&
+          builtJan2026.includes("* last_month_start: '2025-12-01'") &&
+          builtJan2026.includes("* month_start: '2026-01-01'") &&
+          !builtJan2026.includes('2026-09-01') &&
+          !builtJan2026.includes('2026-10-01');
+
+        const junHelpersOk =
+          builtJun2027.includes('Today\'s date: 2027-06-10') &&
+          builtJun2027.includes("* last_month_start: '2027-05-01'") &&
+          builtJun2027.includes("* month_start: '2027-06-01'") &&
+          !builtJun2027.includes('2026-09-01') &&
+          !builtJun2027.includes('2026-10-01');
+
+        const passed =
+          staticDates === null &&
+          exactSevenPlaceholders &&
+          janHelpersOk &&
+          junHelpersOk;
+
+        return {
+          passed,
+          details: `staticDates=${staticDates ? staticDates.join(',') : 'none'}, exactSevenPlaceholders=${exactSevenPlaceholders}, jan2026Ok=${janHelpersOk}, jun2027Ok=${junHelpersOk}`,
         };
       },
     },
