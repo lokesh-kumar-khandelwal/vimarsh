@@ -1,0 +1,6 @@
+{
+  "name": "Vimarsh: Text-to-SQL Clarification Engine",
+  "description": "Think before you query. A browser-only Text-to-SQL clarification engine with deterministic SQL validation, Web Worker SQLite execution, and ambiguity detection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
