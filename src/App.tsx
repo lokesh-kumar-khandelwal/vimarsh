@@ -56,10 +56,10 @@ import type {
 
 type WorkspaceArea = 'ask' | 'devtools';
 type DevToolTab =
+  | 'schema'
   | 'evaluation'
   | 'playground'
   | 'selftests'
-  | 'schema'
   | 'context'
   | 'diagnostics';
 
@@ -67,7 +67,6 @@ export function App() {
   const [workspaceArea, setWorkspaceArea] = useState<WorkspaceArea>('ask');
   const [devToolTab, setDevToolTab] = useState<DevToolTab>('evaluation');
   const [showDevKeyBanner, setShowDevKeyBanner] = useState<boolean>(false);
-  const [confirmingDbReset, setConfirmingDbReset] = useState<boolean>(false);
 
   const [connectionState, setConnectionState] = useState<ByokConnectionState>(
     () => getConnectionState()
@@ -136,7 +135,7 @@ export function App() {
           : await dbClient.init();
         const freshSchema = await dbClient.getSchemaContext();
         setSeedReport(initPayload.seedReport);
-        setSchemaContext(refreshedOrInitial(freshSchema));
+        setSchemaContext(freshSchema);
         await executeAllSelfTests(initPayload.seedReport, freshSchema);
       } catch (err) {
         const msg =
@@ -191,11 +190,6 @@ export function App() {
     }
   };
 
-  const handleConfirmedDbReset = () => {
-    setConfirmingDbReset(false);
-    void initializeOrResetWorker(true);
-  };
-
   const passedTestsCount = testResults.filter((t) => t.passed).length;
   const allTestsPassed =
     testResults.length > 0 && passedTestsCount === testResults.length;
@@ -205,7 +199,7 @@ export function App() {
       id="top"
       className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans"
     >
-      {/* Top Bar: 3 zones (Brand wordmark | Primary vs Developer navigation | API Key status/action) */}
+      {/* Top Bar: 3 zones (Brand wordmark | Ask Data vs Developer Tools | API Key status/action) */}
       <header className="h-14 flex items-center justify-between gap-4 px-4 sm:px-6 border-b border-slate-800/90 bg-slate-950/95 sticky top-0 z-20 backdrop-blur-xs">
         <button
           type="button"
@@ -295,7 +289,7 @@ export function App() {
             </p>
             <button
               type="button"
-              onClick={() => void initializeOrResetWorker(true)}
+              onClick={() => void initializeOrResetWorker(false)}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-rose-800 text-white hover:bg-rose-700 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -310,10 +304,12 @@ export function App() {
             dbClient={dbClient}
             connectionState={connectionState}
             onConnectionStateChange={setConnectionState}
+            isLoadingDb={isLoading}
+            onResetDatabase={() => void initializeOrResetWorker(true)}
           />
         ) : (
           <div className="space-y-6">
-            {/* Developer Tools Header & Database Reset Control */}
+            {/* Developer Tools Header, Stage 4 Banner, Self-Test Status & Version Diagnostics */}
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
@@ -321,9 +317,9 @@ export function App() {
                     Developer Tools &amp; Verification Suite
                   </h1>
                   <p className="text-xs text-slate-400 mt-1">
-                    Inspect the sample database schema, test the 10-step SQL
-                    safety validator, run golden evaluations, and verify all
-                    engine self-tests.
+                    Stage 4: Full Clarification Chat UI, Auto-Chart, 32
+                    Date-Proof Golden Tests, Multiset Comparator &amp;
+                    Evaluation Metrics
                   </p>
                 </div>
 
@@ -347,58 +343,21 @@ export function App() {
                       </span>
                     </span>
                   )}
-
-                  {!confirmingDbReset && (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingDbReset(true)}
-                      disabled={isLoading}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-200 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
-                    >
-                      <RefreshCw
-                        className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`}
-                      />
-                      <span>Reset Sample Database</span>
-                    </button>
-                  )}
                 </div>
               </div>
 
-              {/* Explicit Confirmation Step for Database Reset */}
-              {confirmingDbReset && (
-                <div
-                  role="alert"
-                  className="rounded-lg border border-amber-700/70 bg-amber-950/40 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  <div className="flex items-start gap-2.5 text-xs text-amber-200">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-semibold text-amber-100">
-                        Recreate the in-memory sample database?
-                      </span>{' '}
-                      This will destroy and re-seed the SQLite Web Worker
-                      database back to its initial sample state.
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingDbReset(false)}
-                      className="px-3 py-1.5 text-xs font-medium rounded-md border border-slate-700 bg-slate-900 text-slate-300 hover:text-slate-100 hover:bg-slate-800 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleConfirmedDbReset}
-                      disabled={isLoading}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-600 text-slate-950 hover:bg-amber-500 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
-                    >
-                      Confirm Reset
-                    </button>
-                  </div>
-                </div>
-              )}
+              {/* Developer Runtime Version Metadata */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/60 text-[11px] font-mono text-slate-400 tabular-nums">
+                <span>
+                  PROMPT_VERSION: <strong className="text-slate-200">{PROMPT_VERSION}</strong>
+                </span>
+                <span>
+                  MODEL: <strong className="text-slate-200">{GEMINI_MODEL}</strong>
+                </span>
+                <span>
+                  sql.js: <strong className="text-slate-200">{SQL_JS_VERSION}</strong>
+                </span>
+              </div>
 
               {/* Developer Tools Sub-Navigation */}
               <nav
@@ -448,19 +407,6 @@ export function App() {
 
                 <button
                   type="button"
-                  onClick={() => setDevToolTab('schema')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'schema'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span>Schema &amp; Glossary</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={() => setDevToolTab('context')}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
                     devToolTab === 'context'
@@ -474,6 +420,19 @@ export function App() {
 
                 <button
                   type="button"
+                  onClick={() => setDevToolTab('schema')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
+                    devToolTab === 'schema'
+                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>Data Reference &amp; Reset DB</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setDevToolTab('diagnostics')}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
                     devToolTab === 'diagnostics'
@@ -482,7 +441,7 @@ export function App() {
                   }`}
                 >
                   <Activity className="w-3.5 h-3.5" />
-                  <span>Engine Trace &amp; Audit Log</span>
+                  <span>Diagnostics &amp; Security Prompts</span>
                 </button>
               </nav>
             </div>
@@ -517,45 +476,31 @@ export function App() {
                 isRunning={isLoading}
                 onRerunTests={() => void handleRerunSelfTests()}
               />
-            ) : devToolTab === 'schema' ? (
-              <Sidebar
-                schemaContext={schemaContext}
-                isLoading={isLoading}
-                onResetDatabase={() => void initializeOrResetWorker(true)}
-                showResetControl={false}
-              />
             ) : devToolTab === 'context' ? (
               <ContextInspector
                 schemaContext={schemaContext}
                 seedReport={seedReport}
               />
+            ) : devToolTab === 'schema' ? (
+              <Sidebar
+                schemaContext={schemaContext}
+                isLoading={isLoading}
+                onResetDatabase={() => void initializeOrResetWorker(true)}
+                showResetControl={true}
+              />
             ) : (
-              <EngineDiagnosticsPanel />
+              <EngineDiagnosticsPanel
+                schemaContext={schemaContext}
+                dbClient={dbClient}
+                connectionState={connectionState}
+                onOpenInAskWorkspace={() => setWorkspaceArea('ask')}
+              />
             )}
           </div>
         )}
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-950 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
-        <div>
-          Vimarsh: Text-to-SQL Clarification Engine · Client-Side SQLite Web
-          Worker
-        </div>
-        <div className="flex items-center gap-3 font-mono text-[11px] tabular-nums text-slate-400">
-          <span>PROMPT_VERSION: {PROMPT_VERSION}</span>
-          <span aria-hidden="true">·</span>
-          <span>MODEL: {GEMINI_MODEL}</span>
-          <span aria-hidden="true">·</span>
-          <span>sql.js: {SQL_JS_VERSION}</span>
-        </div>
-      </footer>
     </div>
   );
-}
-
-function refreshedOrInitial(schema: SchemaContext): SchemaContext {
-  return schema;
 }
 
 export default App;
