@@ -570,13 +570,13 @@ export const ClarificationEngineWorkspace: React.FC<
         </div>
       </section>
 
-      {/* Collapsible Data Reference (Schema, Join Hints, Business Glossary & Confirmed Reset) */}
+      {/* Collapsible Data Reference (Schema, Join Hints & Business Glossary) */}
       {showDataReference && (
         <Sidebar
           schemaContext={schemaContext}
           isLoading={isLoadingDb}
           onResetDatabase={onResetDatabase}
-          showResetControl={true}
+          showResetControl={false}
         />
       )}
 
