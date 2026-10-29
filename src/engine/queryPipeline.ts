@@ -8,21 +8,28 @@
  *
  * Budgets:
  * - Transport retries (HTTP 429/503): at most 2 retries with exponential backoff (in llmClient)
- * - JSON-format / contract retry: exactly 1 retry with a "return valid JSON matching the contract only" nudge,
+ * - Per-request timeout: 25 seconds (PER_REQUEST_TIMEOUT_MS), enforced via per-request AbortSignal and capped by remaining overall deadline
+ * - JSON-format / contract retry: at most 1 retry with a "return valid JSON matching the contract only" nudge,
  *   then show a neutral "Vimarsh could not process this request" card.
  * - SQL repair: at most 2 repair attempts (so at most 3 total SQL validations/executions),
  *   each re-validated by the full 10-step validator.
- * - Per-question deadline: 60 seconds.
+ * - Per-question deadline: 60 seconds (PER_QUESTION_DEADLINE_MS).
  * - UI tables_used is derived from the validated SQL's AST, ignoring response.tables_used if it disagrees.
  * - A repaired result sets `repaired: true` with `repairCount` and `originalError`.
  */
 
+import {
+  PER_QUESTION_DEADLINE_MS as CONFIG_PER_QUESTION_DEADLINE_MS,
+  PER_REQUEST_TIMEOUT_MS as CONFIG_PER_REQUEST_TIMEOUT_MS,
+} from '../config';
 import type {
   AssistantConversationTurn,
   DryRunResult,
+  LlmCallTelemetry,
   OperatingMode,
   PipelineStageTrace,
   QueryExecutionResult,
+  QuestionPerformanceTelemetry,
   RepairErrorSource,
   SchemaContext,
   SessionState,
@@ -34,6 +41,8 @@ import { auditLog, type AuditLogStore } from './auditLog';
 import { runInputGuard } from './inputGuard';
 import {
   callLlmWithTransportRetries,
+  classifyGeminiError,
+  getLastProbeTelemetry,
   type LlmTransportFn,
 } from './llmClient';
 import { buildSystemPrompt, buildUserMessage } from './promptBuilder';
@@ -50,7 +59,8 @@ import { validateSqlStatic } from './sqlValidator';
 
 export const MAX_JSON_FORMAT_RETRIES = 1;
 export const MAX_SQL_REPAIR_ATTEMPTS = 2;
-export const PER_QUESTION_DEADLINE_MS = 60_000;
+export const PER_REQUEST_TIMEOUT_MS = CONFIG_PER_REQUEST_TIMEOUT_MS;
+export const PER_QUESTION_DEADLINE_MS = CONFIG_PER_QUESTION_DEADLINE_MS;
 
 export const JSON_CONTRACT_NUDGE =
   'SYSTEM NUDGE: Your previous output failed strict JSON parsing or did not match the 10-key VimarshResponse contract. Return valid JSON matching the contract only.';
@@ -73,6 +83,7 @@ export interface RunQuestionPipelineParams {
   now?: Date;
   abortSignal?: AbortSignal;
   deadlineMs?: number;
+  requestTimeoutMs?: number;
   baseBackoffMs?: number;
 }
 
@@ -86,9 +97,146 @@ function createTurnId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+interface MutableTelemetryAccumulator {
+  llmCalls: LlmCallTelemetry[];
+  totalLlmDurationMs: number;
+  transportRetriesUsed: number;
+  transportRetryDelayMs: number;
+  jsonRetriesUsed: number;
+  sqlRepairCount: number;
+  sqlRepairDurationMs: number;
+  sqlStaticValidationDurationMs: number;
+  sqliteDryRunDurationMs: number;
+  sqliteExecutionDurationMs: number;
+}
+
+function buildFinalPerformanceTelemetry(
+  acc: MutableTelemetryAccumulator,
+  totalLatencyMs: number
+): QuestionPerformanceTelemetry {
+  return {
+    probeDurationMs: getLastProbeTelemetry()?.durationMs ?? null,
+    llmCalls: [...acc.llmCalls],
+    totalLlmDurationMs: Math.round(acc.totalLlmDurationMs),
+    transportRetriesUsed: acc.transportRetriesUsed,
+    transportRetryDelayMs: Math.round(acc.transportRetryDelayMs),
+    jsonRetriesUsed: acc.jsonRetriesUsed,
+    sqlRepairCount: acc.sqlRepairCount,
+    sqlRepairDurationMs: Math.round(acc.sqlRepairDurationMs),
+    sqlStaticValidationDurationMs: Math.round(
+      acc.sqlStaticValidationDurationMs
+    ),
+    sqliteDryRunDurationMs: Math.round(acc.sqliteDryRunDurationMs),
+    sqliteExecutionDurationMs: Math.round(acc.sqliteExecutionDurationMs),
+    totalLatencyMs: Math.round(totalLatencyMs),
+  };
+}
+
+function isAbortOrDeadlineReached(
+  abortSignal?: AbortSignal,
+  deadlineTimestampMs?: number
+): { aborted: boolean; reasonMessage: string } {
+  if (abortSignal?.aborted) {
+    const reason = abortSignal.reason;
+    const classified = classifyGeminiError(
+      reason instanceof Error
+        ? reason
+        : new DOMException('Request aborted', 'AbortError')
+    );
+    return { aborted: true, reasonMessage: classified.safeMessage };
+  }
+  if (
+    deadlineTimestampMs !== undefined &&
+    performance.now() >= deadlineTimestampMs
+  ) {
+    return {
+      aborted: true,
+      reasonMessage:
+        'Question pipeline timed out after reaching the overall question deadline.',
+    };
+  }
+  return { aborted: false, reasonMessage: '' };
+}
+
+/**
+ * Creates a dedicated per-request AbortController bounded by both the 25-second
+ * per-request timeout (PER_REQUEST_TIMEOUT_MS) and the remaining 60-second overall
+ * question deadline, ensuring a stalled model call never hangs the overall budget.
+ */
+function createPerRequestAbortScope(
+  parentSignal: AbortSignal | undefined,
+  requestTimeoutMs: number,
+  deadlineTimestampMs?: number
+): {
+  signal: AbortSignal;
+  effectiveTimeoutMs: number;
+  cleanup: () => void;
+} {
+  const configuredTimeoutMs =
+    requestTimeoutMs > 0 ? requestTimeoutMs : PER_REQUEST_TIMEOUT_MS;
+  const remainingDeadlineMs =
+    deadlineTimestampMs !== undefined
+      ? Math.max(0, deadlineTimestampMs - performance.now())
+      : configuredTimeoutMs;
+  const effectiveTimeoutMs = Math.min(configuredTimeoutMs, remainingDeadlineMs);
+
+  const requestController = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const createRequestTimeoutError = (timeoutMs: number): Error => {
+    const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+    const err = new Error(
+      `Gemini request was cancelled or timed out after ${seconds}s waiting for model response.`
+    );
+    err.name = 'TimeoutError';
+    return err;
+  };
+
+  const onParentAbort = () => {
+    requestController.abort(
+      parentSignal?.reason ?? new DOMException('Request aborted', 'AbortError')
+    );
+  };
+
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      onParentAbort();
+    } else {
+      parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
+  }
+
+  if (!requestController.signal.aborted) {
+    if (effectiveTimeoutMs <= 0) {
+      requestController.abort(createRequestTimeoutError(configuredTimeoutMs));
+    } else {
+      timer = setTimeout(() => {
+        requestController.abort(createRequestTimeoutError(effectiveTimeoutMs));
+      }, effectiveTimeoutMs);
+    }
+  }
+
+  const cleanup = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (parentSignal) {
+      parentSignal.removeEventListener('abort', onParentAbort);
+    }
+  };
+
+  return {
+    signal: requestController.signal,
+    effectiveTimeoutMs,
+    cleanup,
+  };
+}
+
 /**
  * Executes a single model generation + strict JSON parse + responseValidator cycle,
  * applying at most 1 JSON-format/contract retry with `JSON_CONTRACT_NUDGE`.
+ * Enforces both the 25-second per-request AbortSignal timeout and the 60-second overall deadline.
  */
 async function obtainValidatedModelResponse(params: {
   mode: OperatingMode;
@@ -97,20 +245,47 @@ async function obtainValidatedModelResponse(params: {
   schemaContext: SchemaContext;
   trace: PipelineStageTrace[];
   audit: AuditLogStore;
+  telemetry: MutableTelemetryAccumulator;
   repairCount: number;
   failedSqlForAudit: string | null;
   transport?: LlmTransportFn;
   abortSignal?: AbortSignal;
+  requestTimeoutMs?: number;
+  deadlineTimestampMs?: number;
   baseBackoffMs?: number;
 }): Promise<
   | { ok: true; response: VimarshResponse }
   | { ok: false; errorReason: string }
 > {
-  let jsonRetriesUsed = 0;
+  let localJsonRetriesUsed = 0;
 
   while (true) {
+    const deadlineCheck = isAbortOrDeadlineReached(
+      params.abortSignal,
+      params.deadlineTimestampMs
+    );
+    if (deadlineCheck.aborted) {
+      params.trace.push({
+        stage: 'LLM_CALL',
+        status: 'failed',
+        detail: deadlineCheck.reasonMessage,
+        durationMs: 1,
+      });
+      params.audit.record({
+        mode: params.mode,
+        status: 'ERROR',
+        source: 'RETRY_EXHAUSTED',
+        validatorResult: deadlineCheck.reasonMessage,
+        latencyMs: 1,
+        repairCount: params.repairCount,
+        failedSql: params.failedSqlForAudit,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
+      });
+      return { ok: false, errorReason: deadlineCheck.reasonMessage };
+    }
+
     const nudgeMessage =
-      jsonRetriesUsed > 0 ? JSON_CONTRACT_NUDGE : undefined;
+      localJsonRetriesUsed > 0 ? JSON_CONTRACT_NUDGE : undefined;
     const userContent = buildUserMessage({
       ...params.baseUserMessageParams,
       nudgeMessage,
@@ -119,21 +294,46 @@ async function obtainValidatedModelResponse(params: {
     const llmStart = performance.now();
     let rawText = '';
     let finishReason: string | null = null;
+    const requestAbortScope = createPerRequestAbortScope(
+      params.abortSignal,
+      params.requestTimeoutMs ?? PER_REQUEST_TIMEOUT_MS,
+      params.deadlineTimestampMs
+    );
 
     try {
       const llmRes = await callLlmWithTransportRetries({
         systemInstruction: params.systemInstruction,
         userContent,
-        abortSignal: params.abortSignal,
+        abortSignal: requestAbortScope.signal,
         transport: params.transport,
         baseBackoffMs: params.baseBackoffMs,
+        requestTimeoutMs: requestAbortScope.effectiveTimeoutMs,
+        deadlineTimestampMs: params.deadlineTimestampMs,
       });
       rawText = llmRes.rawText;
       finishReason = llmRes.finishReason;
+
+      const phase: LlmCallTelemetry['phase'] =
+        localJsonRetriesUsed > 0
+          ? 'JSON_RETRY'
+          : params.mode === 'REPAIR'
+            ? 'REPAIR'
+            : 'ANSWER';
+
+      params.telemetry.llmCalls.push({
+        phase,
+        durationMs: llmRes.latencyMs,
+        transportRetriesUsed: llmRes.transportRetriesUsed,
+        retryDelayMs: llmRes.retryDelayMs,
+      });
+      params.telemetry.totalLlmDurationMs += llmRes.latencyMs;
+      params.telemetry.transportRetriesUsed += llmRes.transportRetriesUsed;
+      params.telemetry.transportRetryDelayMs += llmRes.retryDelayMs;
+
       params.trace.push({
         stage: 'LLM_CALL',
         status: 'passed',
-        detail: `Model responded (${params.mode}${jsonRetriesUsed > 0 ? ', JSON retry #1' : ''}${llmRes.transportRetriesUsed > 0 ? `, transport retries=${llmRes.transportRetriesUsed}` : ''})`,
+        detail: `Model responded (${params.mode}${localJsonRetriesUsed > 0 ? ', JSON retry #1' : ''}${llmRes.transportRetriesUsed > 0 ? `, transport retries=${llmRes.transportRetriesUsed}, retryDelay=${llmRes.retryDelayMs}ms` : ''})`,
         durationMs: llmRes.latencyMs,
       });
       params.audit.record({
@@ -144,10 +344,15 @@ async function obtainValidatedModelResponse(params: {
         latencyMs: llmRes.latencyMs,
         repairCount: params.repairCount,
         failedSql: params.failedSqlForAudit,
+        transportRetriesUsed: llmRes.transportRetriesUsed,
+        retryDelayMs: llmRes.retryDelayMs,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
       });
     } catch (err) {
       const llmDur = Math.max(1, Math.round(performance.now() - llmStart));
       const msg = err instanceof Error ? err.message : String(err);
+      params.telemetry.totalLlmDurationMs += llmDur;
+
       params.trace.push({
         stage: 'LLM_CALL',
         status: 'failed',
@@ -162,8 +367,11 @@ async function obtainValidatedModelResponse(params: {
         latencyMs: llmDur,
         repairCount: params.repairCount,
         failedSql: params.failedSqlForAudit,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
       });
       return { ok: false, errorReason: msg };
+    } finally {
+      requestAbortScope.cleanup();
     }
 
     // Strict JSON Parse
@@ -186,10 +394,19 @@ async function obtainValidatedModelResponse(params: {
         latencyMs: parseDur,
         repairCount: params.repairCount,
         failedSql: params.failedSqlForAudit,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
       });
 
-      if (jsonRetriesUsed < MAX_JSON_FORMAT_RETRIES) {
-        jsonRetriesUsed += 1;
+      const postParseDeadline = isAbortOrDeadlineReached(
+        params.abortSignal,
+        params.deadlineTimestampMs
+      );
+      if (
+        localJsonRetriesUsed < MAX_JSON_FORMAT_RETRIES &&
+        !postParseDeadline.aborted
+      ) {
+        localJsonRetriesUsed += 1;
+        params.telemetry.jsonRetriesUsed += 1;
         continue;
       }
 
@@ -197,12 +414,18 @@ async function obtainValidatedModelResponse(params: {
         mode: params.mode,
         status: 'ERROR',
         source: 'RETRY_EXHAUSTED',
-        validatorResult: `JSON parse failed after ${jsonRetriesUsed} retry: ${parsed.error}`,
+        validatorResult: `JSON parse failed after ${localJsonRetriesUsed} retry: ${parsed.error}`,
         latencyMs: parseDur,
         repairCount: params.repairCount,
         failedSql: params.failedSqlForAudit,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
       });
-      return { ok: false, errorReason: NEUTRAL_PROCESSING_ERROR_MESSAGE };
+      return {
+        ok: false,
+        errorReason: postParseDeadline.aborted
+          ? postParseDeadline.reasonMessage
+          : NEUTRAL_PROCESSING_ERROR_MESSAGE,
+      };
     }
 
     params.trace.push({
@@ -236,10 +459,19 @@ async function obtainValidatedModelResponse(params: {
         latencyMs: valDur,
         repairCount: params.repairCount,
         failedSql: params.failedSqlForAudit,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
       });
 
-      if (jsonRetriesUsed < MAX_JSON_FORMAT_RETRIES) {
-        jsonRetriesUsed += 1;
+      const postValDeadline = isAbortOrDeadlineReached(
+        params.abortSignal,
+        params.deadlineTimestampMs
+      );
+      if (
+        localJsonRetriesUsed < MAX_JSON_FORMAT_RETRIES &&
+        !postValDeadline.aborted
+      ) {
+        localJsonRetriesUsed += 1;
+        params.telemetry.jsonRetriesUsed += 1;
         continue;
       }
 
@@ -247,12 +479,18 @@ async function obtainValidatedModelResponse(params: {
         mode: params.mode,
         status: 'ERROR',
         source: 'RETRY_EXHAUSTED',
-        validatorResult: `Contract validation failed after ${jsonRetriesUsed} retry: ${contractRes.error}`,
+        validatorResult: `Contract validation failed after ${localJsonRetriesUsed} retry: ${contractRes.error}`,
         latencyMs: valDur,
         repairCount: params.repairCount,
         failedSql: params.failedSqlForAudit,
+        jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
       });
-      return { ok: false, errorReason: NEUTRAL_PROCESSING_ERROR_MESSAGE };
+      return {
+        ok: false,
+        errorReason: postValDeadline.aborted
+          ? postValDeadline.reasonMessage
+          : NEUTRAL_PROCESSING_ERROR_MESSAGE,
+      };
     }
 
     params.trace.push({
@@ -270,6 +508,7 @@ async function obtainValidatedModelResponse(params: {
       repairCount: params.repairCount,
       failedSql: params.failedSqlForAudit,
       finalSql: contractRes.response.sql_query,
+      jsonRetriesUsed: params.telemetry.jsonRetriesUsed,
     });
 
     return { ok: true, response: contractRes.response };
@@ -287,16 +526,42 @@ export async function runQuestionPipeline(
   const audit = params.audit ?? auditLog;
   const trace: PipelineStageTrace[] = [];
 
+  const telemetry: MutableTelemetryAccumulator = {
+    llmCalls: [],
+    totalLlmDurationMs: 0,
+    transportRetriesUsed: 0,
+    transportRetryDelayMs: 0,
+    jsonRetriesUsed: 0,
+    sqlRepairCount: 0,
+    sqlRepairDurationMs: 0,
+    sqlStaticValidationDurationMs: 0,
+    sqliteDryRunDurationMs: 0,
+    sqliteExecutionDurationMs: 0,
+  };
+
   const deadlineMs = params.deadlineMs ?? PER_QUESTION_DEADLINE_MS;
+  const requestTimeoutMs = params.requestTimeoutMs ?? PER_REQUEST_TIMEOUT_MS;
+  const deadlineTimestampMs = pipelineStart + deadlineMs;
   const deadlineController = new AbortController();
+
   const deadlineTimer = setTimeout(() => {
-    deadlineController.abort();
+    const seconds = Math.max(1, Math.round(deadlineMs / 1000));
+    const timeoutErr = new Error(
+      `Question pipeline timed out after ${seconds}s overall deadline.`
+    );
+    timeoutErr.name = 'TimeoutError';
+    deadlineController.abort(timeoutErr);
   }, deadlineMs);
 
-  const onCallerAbort = () => deadlineController.abort();
+  const onCallerAbort = () => {
+    deadlineController.abort(
+      params.abortSignal?.reason ??
+        new DOMException('Request aborted', 'AbortError')
+    );
+  };
   if (params.abortSignal) {
     if (params.abortSignal.aborted) {
-      deadlineController.abort();
+      onCallerAbort();
     } else {
       params.abortSignal.addEventListener('abort', onCallerAbort, {
         once: true,
@@ -362,6 +627,10 @@ export async function runQuestionPipeline(
         validatedTablesUsed: [],
         blockedByGuard: true,
         latencyMs: totalLatency,
+        performanceTelemetry: buildFinalPerformanceTelemetry(
+          telemetry,
+          totalLatency
+        ),
         trace,
         timestamp: new Date().toISOString(),
       };
@@ -418,10 +687,13 @@ export async function runQuestionPipeline(
       schemaContext: params.schemaContext,
       trace,
       audit,
+      telemetry,
       repairCount: 0,
       failedSqlForAudit: null,
       transport: params.transport,
       abortSignal: deadlineController.signal,
+      requestTimeoutMs,
+      deadlineTimestampMs,
       baseBackoffMs: params.baseBackoffMs,
     });
 
@@ -450,6 +722,10 @@ export async function runQuestionPipeline(
         validatedTablesUsed: [],
         processingError: true,
         latencyMs: totalLatency,
+        performanceTelemetry: buildFinalPerformanceTelemetry(
+          telemetry,
+          totalLatency
+        ),
         trace,
         timestamp: new Date().toISOString(),
       };
@@ -497,6 +773,10 @@ export async function runQuestionPipeline(
         response: postRoundResponse,
         validatedTablesUsed: [],
         latencyMs: totalLatency,
+        performanceTelemetry: buildFinalPerformanceTelemetry(
+          telemetry,
+          totalLatency
+        ),
         trace,
         timestamp: new Date().toISOString(),
       };
@@ -518,6 +798,7 @@ export async function runQuestionPipeline(
       const valStart = performance.now();
       const staticRes = validateSqlStatic(candidateSql, params.schemaContext);
       const valDur = Math.max(1, Math.round(performance.now() - valStart));
+      telemetry.sqlStaticValidationDurationMs += valDur;
 
       let validationOrExecError: {
         source: RepairErrorSource;
@@ -568,14 +849,17 @@ export async function runQuestionPipeline(
         const dryStart = performance.now();
         try {
           const dryRes = await params.dbRunner.dryRun(validatedSql);
+          const dryDur = Math.max(1, Math.round(dryRes.durationMs));
+          telemetry.sqliteDryRunDurationMs += dryDur;
           trace.push({
             stage: 'DRY_RUN',
             status: 'passed',
             detail: 'Step 9 EXPLAIN QUERY PLAN succeeded',
-            durationMs: Math.max(1, Math.round(dryRes.durationMs)),
+            durationMs: dryDur,
           });
         } catch (err) {
           const dryDur = Math.max(1, Math.round(performance.now() - dryStart));
+          telemetry.sqliteDryRunDurationMs += dryDur;
           const dryMsg =
             err instanceof Error
               ? err.message
@@ -606,16 +890,18 @@ export async function runQuestionPipeline(
           const execStart = performance.now();
           try {
             executionResult = await params.dbRunner.execute(validatedSql);
+            const execDur = Math.max(
+              1,
+              Math.round(executionResult.executionTimeMs)
+            );
+            telemetry.sqliteExecutionDurationMs += execDur;
             trace.push({
               stage: 'WORKER_EXECUTE',
               status: 'passed',
               detail: executionResult.isEmpty
                 ? 'Executed cleanly (0 rows: No rows matched)'
                 : `Executed cleanly (${executionResult.rowCount} rows${executionResult.truncated ? ', truncated at 1000' : ''})`,
-              durationMs: Math.max(
-                1,
-                Math.round(executionResult.executionTimeMs)
-              ),
+              durationMs: execDur,
             });
             audit.record({
               mode: currentMode,
@@ -623,10 +909,7 @@ export async function runQuestionPipeline(
               source: 'EXECUTOR',
               validatorResult: 'Step 10 execution succeeded',
               rowCount: executionResult.rowCount,
-              latencyMs: Math.max(
-                1,
-                Math.round(executionResult.executionTimeMs)
-              ),
+              latencyMs: execDur,
               repairCount,
               finalSql: validatedSql,
             });
@@ -635,6 +918,7 @@ export async function runQuestionPipeline(
               1,
               Math.round(performance.now() - execStart)
             );
+            telemetry.sqliteExecutionDurationMs += execDur;
             const execMsg = err instanceof Error ? err.message : String(err);
             validationOrExecError = {
               source: 'EXECUTION',
@@ -680,6 +964,10 @@ export async function runQuestionPipeline(
           repairCount,
           originalError: firstFailureError,
           latencyMs: totalLatency,
+          performanceTelemetry: buildFinalPerformanceTelemetry(
+            telemetry,
+            totalLatency
+          ),
           trace,
           timestamp: new Date().toISOString(),
         };
@@ -694,6 +982,60 @@ export async function runQuestionPipeline(
       };
       if (!firstFailureError) {
         firstFailureError = failureInfo.message;
+      }
+
+      // Check if overall deadline expired or caller aborted BEFORE starting any repair attempt
+      const preRepairDeadline = isAbortOrDeadlineReached(
+        deadlineController.signal,
+        deadlineTimestampMs
+      );
+      if (preRepairDeadline.aborted) {
+        const totalLatency = Math.max(
+          1,
+          Math.round(performance.now() - pipelineStart)
+        );
+        audit.record({
+          mode: 'REPAIR',
+          status: 'REJECT',
+          source: 'RETRY_EXHAUSTED',
+          validatorResult: `SQL repair stopped due to cancellation or deadline: ${preRepairDeadline.reasonMessage}`,
+          latencyMs: totalLatency,
+          repairCount,
+          failedSql: candidateSql,
+        });
+
+        const abortedRepairResponse: VimarshResponse = {
+          status: 'REJECT',
+          reasoning: `Pipeline deadline or cancellation prevented starting SQL repair (${preRepairDeadline.reasonMessage}). Unvalidated SQL is never executed.`,
+          sql_query: null,
+          follow_up_question: null,
+          clarification_options: [],
+          ambiguity_type: null,
+          assumptions: [],
+          tables_used: [],
+          confidence: 0,
+          rejection_reason: preRepairDeadline.reasonMessage,
+        };
+
+        const assistantTurn: AssistantConversationTurn = {
+          id: createTurnId('assistant'),
+          role: 'assistant',
+          response: abortedRepairResponse,
+          validatedTablesUsed: [],
+          repaired: false,
+          repairCount,
+          originalError: firstFailureError,
+          processingError: true,
+          latencyMs: totalLatency,
+          performanceTelemetry: buildFinalPerformanceTelemetry(
+            telemetry,
+            totalLatency
+          ),
+          trace,
+          timestamp: new Date().toISOString(),
+        };
+        const nextSession = session.recordTurnPair(userTurn, assistantTurn);
+        return { userTurn, assistantTurn, sessionState: nextSession };
       }
 
       if (repairCount >= MAX_SQL_REPAIR_ATTEMPTS) {
@@ -735,6 +1077,10 @@ export async function runQuestionPipeline(
           originalError: firstFailureError,
           processingError: true,
           latencyMs: totalLatency,
+          performanceTelemetry: buildFinalPerformanceTelemetry(
+            telemetry,
+            totalLatency
+          ),
           trace,
           timestamp: new Date().toISOString(),
         };
@@ -744,6 +1090,7 @@ export async function runQuestionPipeline(
 
       // Trigger REPAIR attempt
       repairCount += 1;
+      telemetry.sqlRepairCount = repairCount;
       const repairStart = performance.now();
       trace.push({
         stage: 'REPAIR_ATTEMPT',
@@ -778,14 +1125,19 @@ export async function runQuestionPipeline(
         schemaContext: params.schemaContext,
         trace,
         audit,
+        telemetry,
         repairCount,
         failedSqlForAudit: candidateSql,
         transport: params.transport,
         abortSignal: deadlineController.signal,
+        requestTimeoutMs,
+        deadlineTimestampMs,
         baseBackoffMs: params.baseBackoffMs,
       });
 
       const repairDur = Math.max(1, Math.round(performance.now() - repairStart));
+      telemetry.sqlRepairDurationMs += repairDur;
+
       if (!repairOutcome.ok) {
         const totalLatency = Math.max(
           1,
@@ -812,6 +1164,10 @@ export async function runQuestionPipeline(
           originalError: firstFailureError,
           processingError: true,
           latencyMs: totalLatency,
+          performanceTelemetry: buildFinalPerformanceTelemetry(
+            telemetry,
+            totalLatency
+          ),
           trace,
           timestamp: new Date().toISOString(),
         };
@@ -834,6 +1190,10 @@ export async function runQuestionPipeline(
           repairCount,
           originalError: firstFailureError,
           latencyMs: totalLatency,
+          performanceTelemetry: buildFinalPerformanceTelemetry(
+            telemetry,
+            totalLatency
+          ),
           trace,
           timestamp: new Date().toISOString(),
         };
@@ -851,3 +1211,4 @@ export async function runQuestionPipeline(
     }
   }
 }
+

@@ -12,6 +12,7 @@
  * - queryPipeline, retry budgets, REPAIR loop & auditLog (with deterministic mock transport; zero network calls)
  */
 
+import { buildGenerationConfig } from '../../config';
 import { AuditLogStore } from '../../engine/auditLog';
 import {
   safeSerializeUntrustedField,
@@ -24,15 +25,20 @@ import {
   setConnectedApiKey,
 } from '../../engine/keyStore';
 import {
+  callLlmWithTransportRetries,
   computeExponentialBackoffMs,
   connectAndVerifyApiKey,
+  getLastProbeTelemetry,
 } from '../../engine/llmClient';
 import {
   buildSystemPrompt,
   buildUserMessage,
 } from '../../engine/promptBuilder';
+
 import {
   JSON_CONTRACT_NUDGE,
+  PER_QUESTION_DEADLINE_MS,
+  PER_REQUEST_TIMEOUT_MS,
   runQuestionPipeline,
 } from '../../engine/queryPipeline';
 import {
@@ -797,5 +803,443 @@ export async function runStage3EngineTestCases(
     }
   }
 
+  // 15. Stalled API-key connection probe timeout, AbortSignal propagation, concurrent probe deduplication & successful probe verification
+  {
+    const t0 = performance.now();
+    const prevKey = getApiKey();
+    disconnectApiKey();
+
+    try {
+      let stalledProbeCalls = 0;
+      let stalledSignalAborted = false;
+
+      const stalledProbeTransport = async (params: {
+        abortSignal?: AbortSignal;
+      }): Promise<{ rawText: string; finishReason: string | null }> => {
+        stalledProbeCalls += 1;
+        return new Promise((_resolve, reject) => {
+          params.abortSignal?.addEventListener(
+            'abort',
+            () => {
+              stalledSignalAborted = true;
+              reject(new DOMException('Probe aborted by timeout', 'AbortError'));
+            },
+            { once: true }
+          );
+        });
+      };
+
+      // Trigger two concurrent calls to verify concurrent probe deduplication
+      const [probeState1, probeState2] = await Promise.all([
+        connectAndVerifyApiKey(
+          'AIzaSyTestStalledProbeKey1122',
+          stalledProbeTransport,
+          { timeoutMs: 25, baseBackoffMs: 1 }
+        ),
+        connectAndVerifyApiKey(
+          'AIzaSyTestStalledProbeKey1122',
+          stalledProbeTransport,
+          { timeoutMs: 25, baseBackoffMs: 1 }
+        ),
+      ]);
+
+      const keyAfterTimedOutProbe = getApiKey();
+      const timeoutTelemetry = getLastProbeTelemetry();
+
+      // Now verify a successful probe sets connected and stores last4
+      let okProbeCalls = 0;
+      const okProbeState = await connectAndVerifyApiKey(
+        'AIzaSyTestSuccessProbeKey3344',
+        async () => {
+          okProbeCalls += 1;
+          return { rawText: '{"ok": true}', finishReason: 'STOP' };
+        },
+        { timeoutMs: 500, baseBackoffMs: 1 }
+      );
+      const okTelemetry = getLastProbeTelemetry();
+
+      const passed =
+        stalledProbeCalls === 1 &&
+        stalledSignalAborted &&
+        probeState1.status === 'network_error' &&
+        probeState2.status === 'network_error' &&
+        /timed out/i.test(probeState1.message) &&
+        keyAfterTimedOutProbe === null &&
+        timeoutTelemetry?.status === 'network_error' &&
+        okProbeCalls === 1 &&
+        okProbeState.status === 'connected' &&
+        okProbeState.last4 === '3344' &&
+        getApiKey() === 'AIzaSyTestSuccessProbeKey3344' &&
+        okTelemetry?.status === 'connected';
+
+      record(
+        's3_15_connect_probe_timeout_and_deduplication',
+        'connectAndVerifyApiKey aborts stalled probes on timeout without retrying, deduplicates concurrent connection attempts, never marks unverified keys connected, and connects valid {"ok": true} probes',
+        passed,
+        `stalledCalls=${stalledProbeCalls}, signalAborted=${stalledSignalAborted}, stalledStatus=${probeState1.status}, okStatus=${okProbeState.status}, probeDurationMs=${okTelemetry?.durationMs ?? 0}`,
+        t0
+      );
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+  }
+
+  // 16. Non-retryable error classes (aborted, timeout, invalid_key, config_rejected, permanent quota) & SDK single-attempt config
+  {
+    const t0 = performance.now();
+    const prevKey = getApiKey();
+    setConnectedApiKey('AIzaSyTestRetryPolicyKey5566');
+
+    try {
+      const controller = new AbortController();
+      const genConfig = buildGenerationConfig('sys', undefined, {
+        abortSignal: controller.signal,
+        timeoutMs: 15000,
+      });
+      const sdkSingleAttemptConfigured =
+        genConfig.httpOptions?.retryOptions?.attempts === 1 &&
+        genConfig.httpOptions?.timeout === 15000 &&
+        genConfig.abortSignal === controller.signal;
+
+      const countCallsForError = async (
+        errFactory: () => Error,
+        preAbort?: boolean
+      ): Promise<number> => {
+        let calls = 0;
+        const callAbort = new AbortController();
+        if (preAbort) {
+          callAbort.abort();
+        }
+        try {
+          await callLlmWithTransportRetries({
+            systemInstruction: 'sys',
+            userContent: 'user',
+            abortSignal: callAbort.signal,
+            baseBackoffMs: 1,
+            requestTimeoutMs: 200,
+            transport: async () => {
+              calls += 1;
+              throw errFactory();
+            },
+          });
+        } catch {
+          // expected
+        }
+        return calls;
+      };
+
+      const preAbortedCalls = await countCallsForError(
+        () => new DOMException('Aborted', 'AbortError'),
+        true
+      );
+      const inFlightAbortedCalls = await countCallsForError(
+        () => new DOMException('Aborted', 'AbortError')
+      );
+      const timeoutCalls = await countCallsForError(() => {
+        const e = new Error('Request timed out after 22s');
+        e.name = 'TimeoutError';
+        return e;
+      });
+      const invalidKeyCalls = await countCallsForError(() => {
+        const e = new Error('401 API_KEY_INVALID') as Error & { status?: number };
+        e.status = 401;
+        return e;
+      });
+      const configRejectedCalls = await countCallsForError(() => {
+        const e = new Error(
+          '400 INVALID_ARGUMENT: response_schema rejected'
+        ) as Error & { status?: number };
+        e.status = 400;
+        return e;
+      });
+      const permanentQuotaCalls = await countCallsForError(() => {
+        const e = new Error(
+          '429 RESOURCE_EXHAUSTED: Quota exceeded for metricPerDay, limit: 0'
+        ) as Error & { status?: number };
+        e.status = 429;
+        return e;
+      });
+      const transient429Calls = await countCallsForError(() => {
+        const e = new Error(
+          '429 RESOURCE_EXHAUSTED: Rate limit reached'
+        ) as Error & { status?: number };
+        e.status = 429;
+        return e;
+      });
+
+      const passed =
+        sdkSingleAttemptConfigured &&
+        preAbortedCalls === 0 &&
+        inFlightAbortedCalls === 1 &&
+        timeoutCalls === 1 &&
+        invalidKeyCalls === 1 &&
+        configRejectedCalls === 1 &&
+        permanentQuotaCalls === 1 &&
+        transient429Calls === 3;
+
+      record(
+        's3_16_non_retryable_errors_and_sdk_retry_guard',
+        'buildGenerationConfig disables SDK internal p-retry (attempts=1); aborted, timed-out, 401/403, 400, and permanent daily 429 errors are never retried; transient 429/503 retry at most 2 times',
+        passed,
+        `sdkAttempts1=${sdkSingleAttemptConfigured}, preAborted=${preAbortedCalls}, aborted=${inFlightAbortedCalls}, timeout=${timeoutCalls}, 401=${invalidKeyCalls}, 400=${configRejectedCalls}, perm429=${permanentQuotaCalls}, transient429=${transient429Calls}`,
+        t0
+      );
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+  }
+
+  // 17. Stalled Gemini question request times out cleanly, aborts transport, and never executes unvalidated SQL
+  if (dbRunner) {
+    const t0 = performance.now();
+    const prevKey = getApiKey();
+    setConnectedApiKey('AIzaSyTestStalledQuestionKey6677');
+
+    try {
+      let llmCalls = 0;
+      let transportAborted = false;
+      let dryRunCalls = 0;
+      let execCalls = 0;
+
+      const spyRunner = {
+        dryRun: async (sql: ValidatedSql) => {
+          dryRunCalls += 1;
+          return dbRunner.dryRun(sql);
+        },
+        execute: async (sql: ValidatedSql) => {
+          execCalls += 1;
+          return dbRunner.execute(sql);
+        },
+      };
+
+      const outcome = await runQuestionPipeline({
+        rawQuestion: 'What was our total revenue last month?',
+        schemaContext,
+        dbRunner: spyRunner,
+        session: new SessionStore(),
+        audit: new AuditLogStore(),
+        requestTimeoutMs: 25,
+        deadlineMs: 500,
+        baseBackoffMs: 1,
+        transport: async (params) => {
+          llmCalls += 1;
+          return new Promise((_resolve, reject) => {
+            params.abortSignal?.addEventListener(
+              'abort',
+              () => {
+                transportAborted = true;
+                reject(new DOMException('Question aborted', 'AbortError'));
+              },
+              { once: true }
+            );
+          });
+        },
+      });
+
+      const passed =
+        PER_REQUEST_TIMEOUT_MS === 25_000 &&
+        PER_QUESTION_DEADLINE_MS === 60_000 &&
+        llmCalls === 1 &&
+        transportAborted &&
+        dryRunCalls === 0 &&
+        execCalls === 0 &&
+        outcome.assistantTurn.response.status === 'REJECT' &&
+        outcome.assistantTurn.processingError === true &&
+        /timed out/i.test(
+          outcome.assistantTurn.response.rejection_reason ?? ''
+        );
+
+      record(
+        's3_17_stalled_question_request_timeout',
+        'queryPipeline enforces a 25-second per-request AbortSignal timeout (within the 60s overall budget), aborts stalled model requests without retrying, and executes zero SQL queries',
+        passed,
+        `perRequestTimeoutMs=${PER_REQUEST_TIMEOUT_MS}, overallDeadlineMs=${PER_QUESTION_DEADLINE_MS}, llmCalls=${llmCalls}, transportAborted=${transportAborted}, dryRunCalls=${dryRunCalls}, execCalls=${execCalls}, reason="${outcome.assistantTurn.response.rejection_reason ?? ''}"`,
+        t0
+      );
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+  }
+
+  // 18. Overall question deadline stops further retries and SQL repair attempts
+  if (dbRunner) {
+    const t0 = performance.now();
+    const prevKey = getApiKey();
+    setConnectedApiKey('AIzaSyTestOverallDeadlineKey7788');
+
+    try {
+      let llmCalls = 0;
+      let execCalls = 0;
+
+      const spyRunner = {
+        dryRun: (sql: ValidatedSql) => dbRunner.dryRun(sql),
+        execute: async (sql: ValidatedSql) => {
+          execCalls += 1;
+          return dbRunner.execute(sql);
+        },
+      };
+
+      // The first ANSWER call takes ~30ms and returns invalid SQL (missing column o.nonexistent_col)
+      // while the overall pipeline deadline is 20ms, so deadline expires before REPAIR can start.
+      const outcome = await runQuestionPipeline({
+        rawQuestion: 'Total revenue over all time',
+        schemaContext,
+        dbRunner: spyRunner,
+        session: new SessionStore(),
+        audit: new AuditLogStore(),
+        requestTimeoutMs: 100,
+        deadlineMs: 20,
+        baseBackoffMs: 1,
+        transport: async () => {
+          llmCalls += 1;
+          await new Promise((r) => setTimeout(r, 30));
+          const badSqlResp: VimarshResponse = {
+            status: 'SUCCESS',
+            reasoning: 'Attempting invalid column query.',
+            sql_query:
+              'SELECT o.nonexistent_col FROM orders o LIMIT 10',
+            follow_up_question: null,
+            clarification_options: [],
+            ambiguity_type: null,
+            assumptions: [],
+            tables_used: ['orders'],
+            confidence: 0.8,
+            rejection_reason: null,
+          };
+          return {
+            rawText: JSON.stringify(badSqlResp),
+            finishReason: 'STOP',
+          };
+        },
+      });
+
+      const passed =
+        llmCalls === 1 &&
+        execCalls === 0 &&
+        (outcome.assistantTurn.repairCount ?? 0) === 0 &&
+        outcome.assistantTurn.response.status === 'REJECT' &&
+        Boolean(outcome.assistantTurn.performanceTelemetry);
+
+      record(
+        's3_18_overall_deadline_stops_retries_and_repairs',
+        'Overall question deadline prevents new JSON retries or SQL repair attempts from starting after deadline expiry and never executes unvalidated SQL',
+        passed,
+        `llmCalls=${llmCalls}, repairCount=${outcome.assistantTurn.repairCount ?? 0}, execCalls=${execCalls}, status=${outcome.assistantTurn.response.status}`,
+        t0
+      );
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+  }
+
+  // 19. Bounded JSON retries (max 1) and SQL repair attempts (max 2) with zero unvalidated execution
+  if (dbRunner) {
+    const t0 = performance.now();
+    const prevKey = getApiKey();
+    setConnectedApiKey('AIzaSyTestBoundedBudgetsKey8899');
+
+    try {
+      let jsonFailCalls = 0;
+      let execCallsOnJsonFail = 0;
+      const jsonFailOutcome = await runQuestionPipeline({
+        rawQuestion: 'Total revenue over all time',
+        schemaContext,
+        dbRunner: {
+          dryRun: (sql) => dbRunner.dryRun(sql),
+          execute: async (sql) => {
+            execCallsOnJsonFail += 1;
+            return dbRunner.execute(sql);
+          },
+        },
+        session: new SessionStore(),
+        audit: new AuditLogStore(),
+        baseBackoffMs: 1,
+        transport: async () => {
+          jsonFailCalls += 1;
+          return { rawText: 'not valid json', finishReason: 'STOP' };
+        },
+      });
+
+      let repairFailCalls = 0;
+      let execCallsOnRepairFail = 0;
+      const repairFailOutcome = await runQuestionPipeline({
+        rawQuestion: 'Total revenue over all time',
+        schemaContext,
+        dbRunner: {
+          dryRun: (sql) => dbRunner.dryRun(sql),
+          execute: async (sql) => {
+            execCallsOnRepairFail += 1;
+            return dbRunner.execute(sql);
+          },
+        },
+        session: new SessionStore(),
+        audit: new AuditLogStore(),
+        baseBackoffMs: 1,
+        transport: async () => {
+          repairFailCalls += 1;
+          const badSqlResp: VimarshResponse = {
+            status: 'SUCCESS',
+            reasoning: 'Always invalid SQL.',
+            sql_query: 'SELECT o.missing_col FROM orders o LIMIT 10',
+            follow_up_question: null,
+            clarification_options: [],
+            ambiguity_type: null,
+            assumptions: [],
+            tables_used: ['orders'],
+            confidence: 0.8,
+            rejection_reason: null,
+          };
+          return {
+            rawText: JSON.stringify(badSqlResp),
+            finishReason: 'STOP',
+          };
+        },
+      });
+
+      const passed =
+        jsonFailCalls === 2 &&
+        jsonFailOutcome.assistantTurn.performanceTelemetry?.jsonRetriesUsed ===
+          1 &&
+        execCallsOnJsonFail === 0 &&
+        repairFailCalls === 3 &&
+        repairFailOutcome.assistantTurn.repairCount === 2 &&
+        repairFailOutcome.assistantTurn.performanceTelemetry?.sqlRepairCount ===
+          2 &&
+        execCallsOnRepairFail === 0 &&
+        repairFailOutcome.assistantTurn.response.status === 'REJECT';
+
+      record(
+        's3_19_bounded_json_retries_and_sql_repairs',
+        'JSON format retries are strictly bounded to 1 (2 calls max) and SQL repair attempts are strictly bounded to 2 (3 calls max), executing zero unvalidated queries',
+        passed,
+        `jsonFailCalls=${jsonFailCalls} (jsonRetries=${jsonFailOutcome.assistantTurn.performanceTelemetry?.jsonRetriesUsed ?? 0}), repairFailCalls=${repairFailCalls} (sqlRepairs=${repairFailOutcome.assistantTurn.repairCount ?? 0}), execCalls=${execCallsOnJsonFail + execCallsOnRepairFail}`,
+        t0
+      );
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+  }
+
   return results;
 }
+

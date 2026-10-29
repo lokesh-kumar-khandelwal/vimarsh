@@ -275,6 +275,36 @@ export interface UserConversationTurn {
   timestamp: string;
 }
 
+export interface ProbeTelemetry {
+  durationMs: number;
+  status: ByokStatus;
+  transportRetriesUsed: number;
+  retryDelayMs: number;
+  timestamp: string;
+}
+
+export interface LlmCallTelemetry {
+  phase: 'ANSWER' | 'JSON_RETRY' | 'REPAIR';
+  durationMs: number;
+  transportRetriesUsed: number;
+  retryDelayMs: number;
+}
+
+export interface QuestionPerformanceTelemetry {
+  probeDurationMs: number | null;
+  llmCalls: LlmCallTelemetry[];
+  totalLlmDurationMs: number;
+  transportRetriesUsed: number;
+  transportRetryDelayMs: number;
+  jsonRetriesUsed: number;
+  sqlRepairCount: number;
+  sqlRepairDurationMs: number;
+  sqlStaticValidationDurationMs: number;
+  sqliteDryRunDurationMs: number;
+  sqliteExecutionDurationMs: number;
+  totalLatencyMs: number;
+}
+
 export interface AssistantConversationTurn {
   id: string;
   role: 'assistant';
@@ -291,6 +321,7 @@ export interface AssistantConversationTurn {
   blockedByGuard?: boolean;
   processingError?: boolean;
   latencyMs: number;
+  performanceTelemetry?: QuestionPerformanceTelemetry;
   trace: PipelineStageTrace[];
   timestamp: string;
 }
@@ -328,6 +359,9 @@ export interface AuditLogEvent {
   repairCount: number;
   failedSql: string | null;
   finalSql: string | null;
+  transportRetriesUsed?: number;
+  retryDelayMs?: number;
+  jsonRetriesUsed?: number;
 }
 
 /**
@@ -349,6 +383,7 @@ export interface PipelineStageTrace {
   detail: string;
   durationMs: number;
 }
+
 
 /**
  * Stage 4: Evaluation & Date-Proof Golden Test Types

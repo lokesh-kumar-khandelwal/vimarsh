@@ -6,22 +6,22 @@
  * - Uses GEMINI_MODEL and buildGenerationConfig() from /config.ts.
  * - NEVER switches configurations at runtime or on error.
  * - Reads the visitor's API key exclusively via /engine/keyStore.ts.
- * - Transport retry budget: at most 2 retries on HTTP 429/503 with exponential backoff,
- *   honoring Retry-After headers when present. Stop immediately on cancellation or non-retryable errors.
- * - Connect flow: makes ONE tiny structured-output probe using buildGenerationConfig() and GEMINI_MODEL
- *   asking for {"ok": true}, classifying outcomes into Connected (last 4 chars), Invalid key (401/403),
- *   Quota exceeded (429), Model unavailable (names GEMINI_MODEL in /config.ts),
- *   Configuration rejected (names buildGenerationConfig in /config.ts), or Network error.
+ * - Disables hidden internal SDK retry multiplication (httpOptions.retryOptions.attempts = 1)
+ *   so Vimarsh's explicit, bounded transport retry policy is the single source of retries.
+ * - Enforces an explicit 15s timeout on connectAndVerifyApiKey() and 22s per-request timeout
+ *   (bounded by the 60s overall question deadline) with AbortController cancellation.
  */
 
 import { GoogleGenAI, type Schema } from '@google/genai';
 import {
   buildGenerationConfig,
   CONNECT_PROBE_SCHEMA,
-  GEMINI_FALLBACK_MODELS,
+  CONNECT_PROBE_TIMEOUT_MS,
   GEMINI_MODEL,
+  MAX_RETRY_AFTER_CAP_MS,
+  PER_REQUEST_TIMEOUT_MS,
 } from '../config';
-import type { ByokConnectionState } from '../types';
+import type { ByokConnectionState, ByokStatus, ProbeTelemetry } from '../types';
 import {
   getApiKey,
   setConnectedApiKey,
@@ -38,6 +38,7 @@ export interface RawLlmCallParams {
   userContent: string;
   schemaOverride?: Schema;
   abortSignal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface RawLlmCallOutput {
@@ -49,62 +50,52 @@ export type LlmTransportFn = (params: RawLlmCallParams) => Promise<RawLlmCallOut
 
 /**
  * Default browser transport using @google/genai SDK directly with the visitor's key.
- * Automatically fails over across GEMINI_FALLBACK_MODELS on transient 503/404 model errors.
+ * Configures httpOptions.retryOptions.attempts = 1 and abortSignal/timeout so each
+ * transport invocation performs exactly 1 bounded HTTP request to GEMINI_MODEL.
  */
 export const defaultGeminiTransport: LlmTransportFn = async (
   params: RawLlmCallParams
 ): Promise<RawLlmCallOutput> => {
-  const ai = new GoogleGenAI({ apiKey: params.apiKey });
+  const ai = new GoogleGenAI({
+    apiKey: params.apiKey,
+    httpOptions: {
+      retryOptions: {
+        attempts: 1,
+      },
+      ...(params.timeoutMs !== undefined && params.timeoutMs > 0
+        ? { timeout: Math.ceil(params.timeoutMs) }
+        : {}),
+    },
+  });
+
   const config = buildGenerationConfig(
     params.systemInstruction,
-    params.schemaOverride
-  );
-  if (params.abortSignal) {
-    config.abortSignal = params.abortSignal;
-  }
-
-  const candidateModels =
-    GEMINI_FALLBACK_MODELS.length > 0 ? GEMINI_FALLBACK_MODELS : [GEMINI_MODEL];
-  let lastError: unknown = null;
-
-  for (let i = 0; i < candidateModels.length; i += 1) {
-    const modelName = candidateModels[i];
-    try {
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: params.userContent,
-        config,
-      });
-
-      const rawText =
-        typeof response.text === 'function'
-          ? (response.text as () => string)()
-          : (response.text ?? '');
-      const finishReason =
-        response.candidates && response.candidates.length > 0
-          ? String(response.candidates[0]?.finishReason ?? 'STOP')
-          : null;
-
-      return {
-        rawText,
-        finishReason,
-      };
-    } catch (err) {
-      lastError = err;
-      const classified = classifyGeminiError(err);
-      const canTryNextModel =
-        i < candidateModels.length - 1 &&
-        !params.abortSignal?.aborted &&
-        (classified.category === 'service_unavailable' ||
-          classified.category === 'model_unavailable');
-      if (canTryNextModel) {
-        continue;
-      }
-      throw err;
+    params.schemaOverride,
+    {
+      abortSignal: params.abortSignal,
+      timeoutMs: params.timeoutMs,
     }
-  }
+  );
 
-  throw lastError ?? new Error('Service temporarily unavailable (503).');
+  const response = await ai.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: params.userContent,
+    config,
+  });
+
+  const rawText =
+    typeof response.text === 'function'
+      ? (response.text as () => string)()
+      : (response.text ?? '');
+  const finishReason =
+    response.candidates && response.candidates.length > 0
+      ? String(response.candidates[0]?.finishReason ?? 'STOP')
+      : null;
+
+  return {
+    rawText,
+    finishReason,
+  };
 };
 
 export interface ClassifiedApiError {
@@ -117,18 +108,116 @@ export interface ClassifiedApiError {
     | 'model_unavailable'
     | 'config_rejected'
     | 'service_unavailable'
+    | 'timeout'
     | 'aborted'
     | 'network_error';
   safeMessage: string;
 }
 
+function createTimeoutError(timeoutMs: number, contextLabel: string): Error {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  const err = new Error(
+    `${contextLabel} was cancelled or timed out after ${seconds}s waiting for Gemini (${GEMINI_MODEL}). Please check your connection or retry.`
+  );
+  err.name = 'TimeoutError';
+  return err;
+}
+
+/**
+ * Executes a single transport call with a linked AbortController and hard timeout.
+ * Guarantees that timers and abort listeners are cleaned up on every exit path,
+ * and aborts the underlying request immediately on timeout or caller cancellation.
+ */
+async function runTransportWithAbortAndTimeout(
+  transport: LlmTransportFn,
+  params: RawLlmCallParams,
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+  contextLabel: string = 'Gemini request'
+): Promise<RawLlmCallOutput> {
+  if (callerSignal?.aborted) {
+    throw new DOMException('Request aborted', 'AbortError');
+  }
+  const boundedTimeoutMs = Math.max(1, Math.ceil(timeoutMs));
+  const attemptController = new AbortController();
+  let timerId: ReturnType<typeof setTimeout> | null = null;
+  let onCallerAbort: (() => void) | null = null;
+
+  const raceAbortPromise = new Promise<never>((_, reject) => {
+    timerId = setTimeout(() => {
+      const timeoutErr = createTimeoutError(boundedTimeoutMs, contextLabel);
+      attemptController.abort(timeoutErr);
+      reject(timeoutErr);
+    }, boundedTimeoutMs);
+
+    if (callerSignal) {
+      onCallerAbort = () => {
+        if (timerId !== null) {
+          clearTimeout(timerId);
+          timerId = null;
+        }
+        const abortReason = callerSignal.reason;
+        const abortErr =
+          abortReason instanceof Error && abortReason.name === 'TimeoutError'
+            ? abortReason
+            : new DOMException('Request aborted', 'AbortError');
+        attemptController.abort(abortErr);
+        reject(abortErr);
+      };
+      callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+  });
+
+  try {
+    return await Promise.race([
+      transport({
+        ...params,
+        abortSignal: attemptController.signal,
+        timeoutMs: boundedTimeoutMs,
+      }),
+      raceAbortPromise,
+    ]);
+  } finally {
+    if (timerId !== null) {
+      clearTimeout(timerId);
+    }
+    if (callerSignal && onCallerAbort) {
+      callerSignal.removeEventListener('abort', onCallerAbort);
+    }
+  }
+}
+
 /**
  * Extracts HTTP status, Retry-After header (if any), and safe classification without leaking raw API key or body.
+ * Never marks timeout, abort, invalid_key, model_unavailable, config_rejected, or permanent quota exhaustion as retryable.
  */
 export function classifyGeminiError(err: unknown): ClassifiedApiError {
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return {
+      httpStatus: null,
+      retryable: false,
+      retryAfterMs: null,
+      category: 'timeout',
+      safeMessage: err.message,
+    };
+  }
+
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+
+  if (/timed?\s*out|timeout|deadline exceeded/i.test(msg)) {
+    return {
+      httpStatus: null,
+      retryable: false,
+      retryAfterMs: null,
+      category: 'timeout',
+      safeMessage:
+        'Request was cancelled or timed out while waiting for Gemini. Please check your connection and try again.',
+    };
+  }
+
   if (
     err instanceof Error &&
-    (err.name === 'AbortError' || /aborted|cancelled|canceled/i.test(err.message))
+    (err.name === 'AbortError' || /aborted|cancelled|canceled/i.test(msg))
   ) {
     return {
       httpStatus: null,
@@ -138,6 +227,7 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
       safeMessage: 'Request was cancelled or timed out.',
     };
   }
+
 
   const errObj =
     typeof err === 'object' && err !== null
@@ -149,7 +239,6 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
       : typeof errObj.statusCode === 'number'
         ? errObj.statusCode
         : null;
-  const msg = err instanceof Error ? err.message : String(err ?? '');
 
   // Check for Retry-After in error headers or message
   let retryAfterMs: number | null = null;
@@ -184,6 +273,24 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
     rawStatus === 429 ||
     /\b(?:429|RESOURCE_EXHAUSTED|quota|rate limit|too many requests)\b/i.test(msg);
   if (is429) {
+    // Distinguish permanent/daily/zero-limit quota exhaustion from transient per-minute rate limits
+    const isPermanentQuota =
+      /\b(?:limit:\s*0|per_?day|perday|daily|billing|plan and billing|quota_exceeded_for_metric|exceeded your current quota)\b/i.test(
+        msg
+      ) ||
+      (retryAfterMs !== null && retryAfterMs > MAX_RETRY_AFTER_CAP_MS);
+
+    if (isPermanentQuota) {
+      return {
+        httpStatus: 429,
+        retryable: false,
+        retryAfterMs,
+        category: 'quota_exceeded',
+        safeMessage:
+          'Quota exceeded (429): daily or project quota is exhausted for this API key. Check your Google AI Studio quota/billing or use another key.',
+      };
+    }
+
     return {
       httpStatus: 429,
       retryable: true,
@@ -258,7 +365,7 @@ export function computeExponentialBackoffMs(
   attempt: number,
   baseBackoffMs: number = BASE_BACKOFF_MS,
   retryAfterMs: number | null = null,
-  maxBackoffMs: number = 10_000
+  maxBackoffMs: number = MAX_RETRY_AFTER_CAP_MS
 ): number {
   const safeAttempt = Math.max(1, Math.floor(attempt));
   if (retryAfterMs !== null && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
@@ -271,7 +378,12 @@ export function computeExponentialBackoffMs(
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
+      const reason = signal.reason;
+      reject(
+        reason instanceof Error && reason.name === 'TimeoutError'
+          ? reason
+          : new DOMException('Aborted', 'AbortError')
+      );
       return;
     }
     const timer = setTimeout(() => {
@@ -282,7 +394,12 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new DOMException('Aborted', 'AbortError'));
+      const reason = signal?.reason;
+      reject(
+        reason instanceof Error && reason.name === 'TimeoutError'
+          ? reason
+          : new DOMException('Aborted', 'AbortError')
+      );
     };
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
@@ -296,18 +413,22 @@ export interface LlmCallWithRetriesOptions {
   abortSignal?: AbortSignal;
   transport?: LlmTransportFn;
   baseBackoffMs?: number;
+  requestTimeoutMs?: number;
+  deadlineTimestampMs?: number;
 }
 
 export interface LlmCallWithRetriesResult {
   rawText: string;
   finishReason: string | null;
   transportRetriesUsed: number;
+  retryDelayMs: number;
   latencyMs: number;
 }
 
 /**
- * Calls the Gemini model using the key in `keyStore`, retrying HTTP 429/503 at most 2 times
- * with exponential backoff (honoring Retry-After if present).
+ * Calls the Gemini model using the key in `keyStore`, retrying transient HTTP 429/503
+ * at most 2 times with exponential backoff (honoring Retry-After if present).
+ * Enforces both a per-request timeout (~22s) and the caller's overall question deadline.
  */
 export async function callLlmWithTransportRetries(
   options: LlmCallWithRetriesOptions
@@ -319,25 +440,59 @@ export async function callLlmWithTransportRetries(
 
   const transport = options.transport ?? defaultGeminiTransport;
   const baseBackoff = options.baseBackoffMs ?? BASE_BACKOFF_MS;
+  const perRequestTimeoutMs = options.requestTimeoutMs ?? PER_REQUEST_TIMEOUT_MS;
   const startTime = performance.now();
   let transportRetriesUsed = 0;
+  let retryDelayMs = 0;
 
   while (true) {
     if (options.abortSignal?.aborted) {
-      throw new DOMException('Request aborted', 'AbortError');
+      const reason = options.abortSignal.reason;
+      const errToThrow =
+        reason instanceof Error && reason.name === 'TimeoutError'
+          ? reason
+          : new DOMException('Request aborted', 'AbortError');
+      const classified = classifyGeminiError(errToThrow);
+      const wrapped = new Error(classified.safeMessage);
+      (wrapped as Error & { classified?: ClassifiedApiError }).classified =
+        classified;
+      throw wrapped;
+    }
+
+    let effectiveTimeoutMs = perRequestTimeoutMs;
+    if (options.deadlineTimestampMs !== undefined) {
+      const remainingDeadlineMs = options.deadlineTimestampMs - performance.now();
+      if (remainingDeadlineMs <= 0) {
+        const timeoutErr = createTimeoutError(
+          perRequestTimeoutMs,
+          'Question pipeline deadline'
+        );
+        const classified = classifyGeminiError(timeoutErr);
+        const wrapped = new Error(classified.safeMessage);
+        (wrapped as Error & { classified?: ClassifiedApiError }).classified =
+          classified;
+        throw wrapped;
+      }
+      effectiveTimeoutMs = Math.min(perRequestTimeoutMs, remainingDeadlineMs);
     }
 
     try {
-      const output = await transport({
-        apiKey,
-        systemInstruction: options.systemInstruction,
-        userContent: options.userContent,
-        abortSignal: options.abortSignal,
-      });
+      const output = await runTransportWithAbortAndTimeout(
+        transport,
+        {
+          apiKey,
+          systemInstruction: options.systemInstruction,
+          userContent: options.userContent,
+        },
+        effectiveTimeoutMs,
+        options.abortSignal,
+        'Gemini request'
+      );
       return {
         rawText: output.rawText,
         finishReason: output.finishReason,
         transportRetriesUsed,
+        retryDelayMs,
         latencyMs: Math.max(1, Math.round(performance.now() - startTime)),
       };
     } catch (err) {
@@ -347,15 +502,34 @@ export async function callLlmWithTransportRetries(
         transportRetriesUsed < MAX_TRANSPORT_RETRIES &&
         !options.abortSignal?.aborted
       ) {
-        transportRetriesUsed += 1;
+        const nextAttempt = transportRetriesUsed + 1;
         const waitMs = computeExponentialBackoffMs(
-          transportRetriesUsed,
+          nextAttempt,
           baseBackoff,
           classified.retryAfterMs,
-          10_000
+          MAX_RETRY_AFTER_CAP_MS
         );
-        await sleepWithAbort(waitMs, options.abortSignal);
-        continue;
+
+        // Do not sleep or retry if the backoff delay would exceed the remaining question deadline
+        const withinDeadline =
+          options.deadlineTimestampMs === undefined ||
+          performance.now() + waitMs < options.deadlineTimestampMs;
+
+        if (withinDeadline) {
+          transportRetriesUsed = nextAttempt;
+          retryDelayMs += waitMs;
+          try {
+            await sleepWithAbort(waitMs, options.abortSignal);
+          } catch (sleepErr) {
+            const sleepClassified = classifyGeminiError(sleepErr);
+            const wrappedSleep = new Error(sleepClassified.safeMessage);
+            (
+              wrappedSleep as Error & { classified?: ClassifiedApiError }
+            ).classified = sleepClassified;
+            throw wrappedSleep;
+          }
+          continue;
+        }
       }
 
       const wrapped = new Error(classified.safeMessage);
@@ -368,93 +542,219 @@ export async function callLlmWithTransportRetries(
 
 export interface ConnectVerifyOptions {
   baseBackoffMs?: number;
+  timeoutMs?: number;
+  abortSignal?: AbortSignal;
   onStatusUpdate?: (state: ByokConnectionState) => void;
+}
+
+let activeConnectProbePromise: Promise<ByokConnectionState> | null = null;
+let activeConnectProbeController: AbortController | null = null;
+let lastProbeTelemetry: ProbeTelemetry | null = null;
+
+export function isConnectProbeInFlight(): boolean {
+  return activeConnectProbePromise !== null;
+}
+
+export function cancelActiveConnectProbe(): void {
+  if (activeConnectProbeController) {
+    activeConnectProbeController.abort(
+      new DOMException('Connection probe cancelled', 'AbortError')
+    );
+    activeConnectProbeController = null;
+  }
+}
+
+export function getLastProbeTelemetry(): ProbeTelemetry | null {
+  return lastProbeTelemetry ? { ...lastProbeTelemetry } : null;
+}
+
+function recordProbeTelemetry(
+  t0: number,
+  status: ByokStatus,
+  transportRetriesUsed: number,
+  retryDelayMs: number
+): ByokStatus {
+  lastProbeTelemetry = {
+    durationMs: Math.max(1, Math.round(performance.now() - t0)),
+    status,
+    transportRetriesUsed,
+    retryDelayMs,
+    timestamp: new Date().toISOString(),
+  };
+  return status;
 }
 
 /**
  * Connects and verifies a visitor-typed Gemini API key by making ONE tiny structured-output
  * request using `buildGenerationConfig()` and `GEMINI_MODEL` in `/config.ts`,
- * with exponential backoff retries on transient HTTP 429/503 errors.
+ * bounded by an explicit 15-second connection timeout (`CONNECT_PROBE_TIMEOUT_MS`) and
+ * guarded against concurrent duplicate connection probes.
  */
 export async function connectAndVerifyApiKey(
   candidateKey: string,
   transport: LlmTransportFn = defaultGeminiTransport,
   options?: ConnectVerifyOptions
 ): Promise<ByokConnectionState> {
-  const trimmed = (candidateKey ?? '').trim();
-  if (trimmed.length === 0) {
-    return setConnectionStatus(
-      'invalid_key',
-      'Invalid key (401/403): please enter a non-empty Gemini API key.'
-    );
+  if (activeConnectProbePromise) {
+    return activeConnectProbePromise;
   }
 
-  const baseBackoff = options?.baseBackoffMs ?? BASE_BACKOFF_MS;
-  const initialConnecting = setConnectionStatus(
-    'connecting',
-    'Verifying your API key with Gemini...'
-  );
-  options?.onStatusUpdate?.(initialConnecting);
-
-  let attempt = 0;
-  while (true) {
-    try {
-      const probeOutput = await transport({
-        apiKey: trimmed,
-        userContent: 'Respond with JSON {"ok": true}',
-        schemaOverride: CONNECT_PROBE_SCHEMA,
-      });
-
-      const parsed = parseStrictJsonResponse(
-        probeOutput.rawText,
-        probeOutput.finishReason
+  const runProbe = async (): Promise<ByokConnectionState> => {
+    const t0 = performance.now();
+    const trimmed = (candidateKey ?? '').trim();
+    if (trimmed.length === 0) {
+      recordProbeTelemetry(t0, 'invalid_key', 0, 0);
+      return setConnectionStatus(
+        'invalid_key',
+        'Invalid key (401/403): please enter a non-empty Gemini API key.'
       );
-      if (!parsed.ok || parsed.data.ok !== true) {
+    }
+
+    const baseBackoff = options?.baseBackoffMs ?? BASE_BACKOFF_MS;
+    const probeTimeoutMs = options?.timeoutMs ?? CONNECT_PROBE_TIMEOUT_MS;
+    const probeDeadlineTimestampMs = t0 + probeTimeoutMs;
+    const probeController = new AbortController();
+    activeConnectProbeController = probeController;
+
+    let onCallerAbort: (() => void) | null = null;
+    if (options?.abortSignal) {
+      if (options.abortSignal.aborted) {
+        recordProbeTelemetry(t0, 'network_error', 0, 0);
         return setConnectionStatus(
-          'config_rejected',
-          'Configuration rejected: buildGenerationConfig() in /config.ts did not return a valid {"ok": true} object.'
+          'network_error',
+          'Connection verification was cancelled.'
         );
       }
-
-      return setConnectedApiKey(trimmed);
-    } catch (err) {
-      const classified = classifyGeminiError(err);
-
-      if (classified.retryable && attempt < MAX_TRANSPORT_RETRIES) {
-        attempt += 1;
-        const waitMs = computeExponentialBackoffMs(
-          attempt,
-          baseBackoff,
-          classified.retryAfterMs,
-          8_000
+      onCallerAbort = () => {
+        probeController.abort(
+          options.abortSignal?.reason ??
+            new DOMException('Connection probe aborted', 'AbortError')
         );
-        const retryLabel =
-          classified.category === 'service_unavailable'
-            ? `Gemini service busy (503). Retrying with exponential backoff (attempt ${attempt} of ${MAX_TRANSPORT_RETRIES})...`
-            : `Rate limit reached (429). Retrying with exponential backoff (attempt ${attempt} of ${MAX_TRANSPORT_RETRIES})...`;
-        const retryState = setConnectionStatus('connecting', retryLabel);
-        options?.onStatusUpdate?.(retryState);
-        await sleepWithAbort(waitMs);
-        continue;
-      }
+      };
+      options.abortSignal.addEventListener('abort', onCallerAbort, {
+        once: true,
+      });
+    }
 
-      switch (classified.category) {
-        case 'invalid_key':
-          return setConnectionStatus('invalid_key', classified.safeMessage);
-        case 'quota_exceeded':
-          return setConnectionStatus('quota_exceeded', classified.safeMessage);
-        case 'service_unavailable':
-          return setConnectionStatus(
-            'service_unavailable',
-            classified.safeMessage
+    const initialConnecting = setConnectionStatus(
+      'connecting',
+      'Verifying your API key with Gemini...'
+    );
+    options?.onStatusUpdate?.(initialConnecting);
+
+    let attempt = 0;
+    let totalRetryDelayMs = 0;
+
+    try {
+      while (true) {
+        const remainingMs = probeDeadlineTimestampMs - performance.now();
+        if (remainingMs <= 0) {
+          throw createTimeoutError(probeTimeoutMs, 'API key verification');
+        }
+
+        try {
+          const probeOutput = await runTransportWithAbortAndTimeout(
+            transport,
+            {
+              apiKey: trimmed,
+              userContent: 'Respond with JSON {"ok": true}',
+              schemaOverride: CONNECT_PROBE_SCHEMA,
+            },
+            remainingMs,
+            probeController.signal,
+            'API key verification'
           );
-        case 'model_unavailable':
-          return setConnectionStatus('model_unavailable', classified.safeMessage);
-        case 'config_rejected':
-          return setConnectionStatus('config_rejected', classified.safeMessage);
-        default:
-          return setConnectionStatus('network_error', classified.safeMessage);
+
+          const parsed = parseStrictJsonResponse(
+            probeOutput.rawText,
+            probeOutput.finishReason
+          );
+          if (!parsed.ok || parsed.data.ok !== true) {
+            recordProbeTelemetry(
+              t0,
+              'config_rejected',
+              attempt,
+              totalRetryDelayMs
+            );
+            return setConnectionStatus(
+              'config_rejected',
+              'Configuration rejected: buildGenerationConfig() in /config.ts did not return a valid {"ok": true} object.'
+            );
+          }
+
+          recordProbeTelemetry(t0, 'connected', attempt, totalRetryDelayMs);
+          return setConnectedApiKey(trimmed);
+        } catch (err) {
+          const classified = classifyGeminiError(err);
+
+          if (
+            classified.retryable &&
+            attempt < MAX_TRANSPORT_RETRIES &&
+            !probeController.signal.aborted
+          ) {
+            const nextAttempt = attempt + 1;
+            const waitMs = computeExponentialBackoffMs(
+              nextAttempt,
+              baseBackoff,
+              classified.retryAfterMs,
+              MAX_RETRY_AFTER_CAP_MS
+            );
+
+            // Only retry if the backoff delay and next attempt fit inside the 15s probe deadline
+            if (performance.now() + waitMs < probeDeadlineTimestampMs) {
+              attempt = nextAttempt;
+              totalRetryDelayMs += waitMs;
+              const retryLabel =
+                classified.category === 'service_unavailable'
+                  ? `Gemini service busy (503). Retrying with exponential backoff (attempt ${attempt} of ${MAX_TRANSPORT_RETRIES})...`
+                  : `Rate limit reached (429). Retrying with exponential backoff (attempt ${attempt} of ${MAX_TRANSPORT_RETRIES})...`;
+              const retryState = setConnectionStatus('connecting', retryLabel);
+              options?.onStatusUpdate?.(retryState);
+              await sleepWithAbort(waitMs, probeController.signal);
+              continue;
+            }
+          }
+
+          let finalStatus: ByokStatus = 'network_error';
+          switch (classified.category) {
+            case 'invalid_key':
+              finalStatus = 'invalid_key';
+              break;
+            case 'quota_exceeded':
+              finalStatus = 'quota_exceeded';
+              break;
+            case 'service_unavailable':
+              finalStatus = 'service_unavailable';
+              break;
+            case 'model_unavailable':
+              finalStatus = 'model_unavailable';
+              break;
+            case 'config_rejected':
+              finalStatus = 'config_rejected';
+              break;
+            default:
+              finalStatus = 'network_error';
+              break;
+          }
+
+          recordProbeTelemetry(t0, finalStatus, attempt, totalRetryDelayMs);
+          return setConnectionStatus(finalStatus, classified.safeMessage);
+        }
+      }
+    } finally {
+      if (options?.abortSignal && onCallerAbort) {
+        options.abortSignal.removeEventListener('abort', onCallerAbort);
+      }
+      if (activeConnectProbeController === probeController) {
+        activeConnectProbeController = null;
       }
     }
-  }
+  };
+
+  activeConnectProbePromise = runProbe().finally(() => {
+    activeConnectProbePromise = null;
+  });
+
+  return activeConnectProbePromise;
 }
+

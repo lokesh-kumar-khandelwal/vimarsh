@@ -1,12 +1,11 @@
 import { Type, type GenerateContentConfig, type Schema } from '@google/genai';
 
-export const GEMINI_MODEL = 'gemini-2.5-flash';
+export const GEMINI_MODEL = 'gemini-flash-latest';
 
-export const GEMINI_FALLBACK_MODELS: ReadonlyArray<string> = [
-  GEMINI_MODEL,
-  'gemini-2.5-flash-lite',
-  'gemini-flash-latest',
-];
+export const CONNECT_PROBE_TIMEOUT_MS = 15_000;
+export const PER_REQUEST_TIMEOUT_MS = 25_000;
+export const PER_QUESTION_DEADLINE_MS = 60_000;
+export const MAX_RETRY_AFTER_CAP_MS = 8_000;
 
 export const SQL_JS_VERSION = '1.15.2';
 
@@ -95,17 +94,35 @@ export const CONNECT_PROBE_SCHEMA: Schema = {
   required: ['ok'],
 };
 
+export interface GenerationConfigOptions {
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export function buildGenerationConfig(
   systemInstruction?: string,
-  schemaOverride?: Schema
+  schemaOverride?: Schema,
+  options?: GenerationConfigOptions
 ): GenerateContentConfig {
   const config: GenerateContentConfig = {
     temperature: 0.1,
     responseMimeType: 'application/json',
     responseSchema: schemaOverride ?? VIMARSH_RESPONSE_SCHEMA,
+    httpOptions: {
+      retryOptions: {
+        attempts: 1,
+      },
+      ...(options?.timeoutMs !== undefined && options.timeoutMs > 0
+        ? { timeout: Math.ceil(options.timeoutMs) }
+        : {}),
+    },
   };
   if (systemInstruction !== undefined) {
     config.systemInstruction = systemInstruction;
   }
+  if (options?.abortSignal) {
+    config.abortSignal = options.abortSignal;
+  }
   return config;
 }
+

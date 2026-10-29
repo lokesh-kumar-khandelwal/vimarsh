@@ -34,6 +34,9 @@ export interface RecordAuditEventInput {
   failedSql?: string | null;
   finalSql?: string | null;
   timestamp?: string;
+  transportRetriesUsed?: number;
+  retryDelayMs?: number;
+  jsonRetriesUsed?: number;
 }
 
 /**
@@ -86,8 +89,18 @@ export function createAuditLogEvent(input: RecordAuditEventInput): AuditLogEvent
       input.finalSql,
       MAX_AUDIT_SQL_LENGTH
     ),
+    ...(input.transportRetriesUsed !== undefined
+      ? { transportRetriesUsed: Math.max(0, Math.floor(input.transportRetriesUsed)) }
+      : {}),
+    ...(input.retryDelayMs !== undefined
+      ? { retryDelayMs: Math.max(0, Math.round(input.retryDelayMs)) }
+      : {}),
+    ...(input.jsonRetriesUsed !== undefined
+      ? { jsonRetriesUsed: Math.max(0, Math.floor(input.jsonRetriesUsed)) }
+      : {}),
   };
 }
+
 
 type AuditLogListener = (events: AuditLogEvent[]) => void;
 

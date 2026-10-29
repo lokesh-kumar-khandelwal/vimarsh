@@ -9,14 +9,15 @@ import {
   LogOut,
   RefreshCw,
   ShieldCheck,
+  XCircle,
 } from 'lucide-react';
+import { disconnectApiKey } from '../engine/keyStore';
 import {
-  disconnectApiKey,
-  setConnectedApiKey,
-} from '../engine/keyStore';
-import {
+  cancelActiveConnectProbe,
   connectAndVerifyApiKey,
   defaultGeminiTransport,
+  getLastProbeTelemetry,
+  isConnectProbeInFlight,
 } from '../engine/llmClient';
 import type { ByokConnectionState } from '../types';
 
@@ -51,8 +52,10 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
     connectionState.status !== 'connecting' &&
     connectionState.status !== 'connected';
 
+  const lastProbe = getLastProbeTelemetry();
+
   const runVerification = async () => {
-    if (isConnecting) return;
+    if (isConnecting || isConnectProbeInFlight()) return;
 
     if (keyInput.trim().length === 0) {
       setLocalHint('Paste your Gemini API key below, then click Connect API Key.');
@@ -80,20 +83,12 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
     await runVerification();
   };
 
-  const handleContinueWithKeyAnyway = () => {
-    const trimmed = keyInput.trim();
-    if (!trimmed) {
-      inputRef.current?.focus();
-      return;
-    }
-    const next = setConnectedApiKey(trimmed);
-    setKeyInput('');
-    setLocalHint(null);
-    setIsChangingKey(false);
-    onStateChange(next);
+  const handleCancelProbe = () => {
+    cancelActiveConnectProbe();
   };
 
   const handleDisconnect = () => {
+    cancelActiveConnectProbe();
     const next = disconnectApiKey();
     setKeyInput('');
     setLocalHint(null);
@@ -118,10 +113,20 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
           <span className="font-mono text-slate-300 tabular-nums">
             Key ending in ••••{connectionState.last4}
           </span>
-          <span className="text-slate-600 hidden sm:inline" aria-hidden="true">
+          {lastProbe && lastProbe.status === 'connected' && (
+            <>
+              <span className="text-slate-600 hidden sm:inline" aria-hidden="true">
+                ·
+              </span>
+              <span className="font-mono text-slate-400 tabular-nums hidden sm:inline">
+                Verified in {lastProbe.durationMs} ms
+              </span>
+            </>
+          )}
+          <span className="text-slate-600 hidden md:inline" aria-hidden="true">
             ·
           </span>
-          <span className="text-slate-400 hidden sm:inline">
+          <span className="text-slate-400 hidden md:inline">
             Stored in this browser tab only
           </span>
         </div>
@@ -200,13 +205,23 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
           className="text-xs"
         >
           {isConnecting ? (
-            <span className="inline-flex items-center gap-1.5 text-sky-300 font-medium">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
-              <span>
-                {connectionState.message ||
-                  'Verifying your API key with Gemini...'}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-sky-300 font-medium">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+                <span>
+                  {connectionState.message ||
+                    'Verifying your API key with Gemini (15s timeout)...'}
+                </span>
               </span>
-            </span>
+              <button
+                type="button"
+                onClick={handleCancelProbe}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition-colors"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Cancel</span>
+              </button>
+            </div>
           ) : isServiceUnavailable ? (
             <div className="rounded-lg border border-amber-700/80 bg-amber-950/40 p-3.5 space-y-2.5">
               <div className="flex items-start gap-2 text-amber-200 font-semibold">
@@ -218,8 +233,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
                   </p>
                   <p className="text-[11px] font-normal text-slate-300 leading-relaxed">
                     Your key remains in the input field below — you can retry
-                    verification immediately or continue with this key without
-                    reloading the application.
+                    verification immediately without reloading the application.
                   </p>
                 </div>
               </div>
@@ -233,16 +247,6 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Retry Verification</span>
                 </button>
-                {keyInput.trim().length > 0 && (
-                  <button
-                    type="button"
-                    disabled={isConnecting}
-                    onClick={handleContinueWithKeyAnyway}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-600/80 bg-amber-900/40 text-amber-100 hover:bg-amber-800/50 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
-                  >
-                    <span>Continue with Key Anyway</span>
-                  </button>
-                )}
               </div>
             </div>
           ) : hasErrorStatus ? (
@@ -268,6 +272,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
           )}
         </div>
       )}
+
 
       <form
         onSubmit={(e) => void handleConnect(e)}

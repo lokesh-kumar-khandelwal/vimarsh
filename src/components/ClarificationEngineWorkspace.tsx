@@ -21,16 +21,24 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { GEMINI_MODEL, SQL_JS_VERSION } from '../config';
+import {
+  CONNECT_PROBE_TIMEOUT_MS,
+  GEMINI_MODEL,
+  PER_QUESTION_DEADLINE_MS,
+  PER_REQUEST_TIMEOUT_MS,
+  SQL_JS_VERSION,
+} from '../config';
 import { auditLog } from '../engine/auditLog';
 import type { DbClient } from '../engine/dbClient';
 import { runInputGuard } from '../engine/inputGuard';
+import { getLastProbeTelemetry } from '../engine/llmClient';
 import { runQuestionPipeline } from '../engine/queryPipeline';
 import {
   PENDING_INPUT_HINT,
   sessionStore,
 } from '../engine/sessionStore';
 import { PROMPT_VERSION } from '../engine/systemPrompt';
+
 import type {
   AssistantConversationTurn,
   AuditLogEvent,
@@ -1157,6 +1165,8 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
       ? assistantTurns[assistantTurns.length - 1]
       : null;
   const latestTrace: PipelineStageTrace[] = latestAssistantTurn?.trace ?? [];
+  const latestPerf = latestAssistantTurn?.performanceTelemetry ?? null;
+  const lastProbe = getLastProbeTelemetry();
 
   const handleDownloadAuditLog = () => {
     const jsonText = auditLog.exportJson();
@@ -1193,8 +1203,135 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
           <span>MODEL: {GEMINI_MODEL}</span>
           <span aria-hidden="true">·</span>
           <span>sql.js: {SQL_JS_VERSION}</span>
+          <span aria-hidden="true">·</span>
+          <span>
+            TIMEOUTS: probe={Math.round(CONNECT_PROBE_TIMEOUT_MS / 1000)}s / req=
+            {Math.round(PER_REQUEST_TIMEOUT_MS / 1000)}s / total=
+            {Math.round(PER_QUESTION_DEADLINE_MS / 1000)}s
+          </span>
         </div>
       </section>
+
+      {/* Performance & Latency Telemetry Breakdown */}
+      <section
+        aria-label="Performance and Latency Telemetry"
+        className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-4"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-sky-400" />
+            <h2 className="text-sm font-semibold text-slate-100">
+              Performance &amp; Latency Telemetry
+            </h2>
+          </div>
+          <span className="font-mono text-xs text-slate-400 tabular-nums">
+            SDK internal retries: disabled (attempts=1) · App transport retries: max 2
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs font-mono">
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">API-Key Probe</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {lastProbe
+                ? `${lastProbe.durationMs} ms`
+                : latestPerf?.probeDurationMs !== null &&
+                    latestPerf?.probeDurationMs !== undefined
+                  ? `${latestPerf.probeDurationMs} ms`
+                  : '—'}
+            </div>
+            {lastProbe && (
+              <div className="text-[10px] text-slate-400">
+                status={lastProbe.status} (retries={lastProbe.transportRetriesUsed})
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">Gemini Calls</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {latestPerf ? `${latestPerf.totalLlmDurationMs} ms` : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              {latestPerf ? `${latestPerf.llmCalls.length} call(s)` : 'No turn yet'}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">Transport Retries</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {latestPerf ? latestPerf.transportRetriesUsed : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              {latestPerf ? `delay=${latestPerf.transportRetryDelayMs} ms` : '429/503'}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">JSON Retries</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {latestPerf ? `${latestPerf.jsonRetriesUsed} / 1` : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">Contract nudge</div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">SQL Repairs</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {latestPerf ? `${latestPerf.sqlRepairCount} / 2` : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              {latestPerf ? `${latestPerf.sqlRepairDurationMs} ms` : 'REPAIR loop'}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">Static SQL Check</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {latestPerf ? `${latestPerf.sqlStaticValidationDurationMs} ms` : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">Steps 1–8 AST</div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">SQLite Dry-Run / Exec</div>
+            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+              {latestPerf
+                ? `${latestPerf.sqliteDryRunDurationMs} / ${latestPerf.sqliteExecutionDurationMs} ms`
+                : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">Steps 9 &amp; 10</div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
+            <div className="text-[11px] text-slate-400">Total Question</div>
+            <div className="text-sm font-semibold text-sky-300 tabular-nums">
+              {latestPerf
+                ? `${latestPerf.totalLatencyMs} ms`
+                : latestAssistantTurn
+                  ? `${latestAssistantTurn.latencyMs} ms`
+                  : '—'}
+            </div>
+            <div className="text-[10px] text-slate-400">End-to-end</div>
+          </div>
+        </div>
+
+        {latestPerf && latestPerf.llmCalls.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-mono text-slate-300">
+            <span className="text-slate-400">Per-Call Gemini Breakdown:</span>
+            {latestPerf.llmCalls.map((call, idx) => (
+              <span
+                key={`${call.phase}_${idx}`}
+                className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 tabular-nums"
+              >
+                #{idx + 1} {call.phase}: {call.durationMs}ms (retries=
+                {call.transportRetriesUsed}, backoff={call.retryDelayMs}ms)
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+
 
       {/* Adversarial, Security & Ambiguity Diagnostic Examples (kept in Developer Tools) */}
       <section
