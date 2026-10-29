@@ -65,7 +65,19 @@ function isValidHeaderAsciiKey(key: string): boolean {
   return key.length > 0 && /^[\x21-\x7E]+$/.test(key);
 }
 
-function shouldTryFallbackModel(err: unknown): boolean {
+function isApiKeyAuthError(status: number | null, msg: string): boolean {
+  if (status === 401 || status === 403) {
+    return true;
+  }
+  return /\b(?:401|403|API_KEY_INVALID|API_KEY_EXPIRED|API_KEY_NOT_FOUND|API_KEY_HTTP_REFERRER_BLOCKED|API_KEY_SERVICE_BLOCKED|API_KEY_IP_ADDRESS_BLOCKED|PERMISSION_DENIED|UNAUTHENTICATED|invalid api key|api key not valid|api key expired|pass a valid api key)\b/i.test(
+    msg
+  );
+}
+
+function extractStatusAndMessage(err: unknown): {
+  status: number | null;
+  msg: string;
+} {
   const msg = err instanceof Error ? err.message : String(err ?? '');
   const errObj =
     typeof err === 'object' && err !== null
@@ -77,30 +89,43 @@ function shouldTryFallbackModel(err: unknown): boolean {
       : typeof errObj.statusCode === 'number'
         ? errObj.statusCode
         : null;
-  if (status === 401 || status === 403) {
-    return false;
-  }
-  if (/\b(?:API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED|invalid api key)\b/i.test(msg)) {
+  return { status, msg };
+}
+
+function isNonKey400Error(err: unknown): boolean {
+  const { status, msg } = extractStatusAndMessage(err);
+  if (isApiKeyAuthError(status, msg)) {
     return false;
   }
   return (
+    status === 400 ||
+    /\b(?:400|INVALID_ARGUMENT|FAILED_PRECONDITION)\b/i.test(msg)
+  );
+}
+
+function shouldTryFallbackModel(err: unknown): boolean {
+  const { status, msg } = extractStatusAndMessage(err);
+  if (isApiKeyAuthError(status, msg)) {
+    return false;
+  }
+  return (
+    status === 400 ||
     status === 404 ||
     status === 429 ||
     status === 500 ||
     status === 502 ||
     status === 503 ||
     status === 504 ||
-    /\b(?:404|429|500|502|503|504|UNAVAILABLE|DEADLINE_EXCEEDED|NOT_FOUND|RESOURCE_EXHAUSTED|high demand|overloaded|Deadline expired)\b/i.test(
+    /\b(?:400|404|429|500|502|503|504|INVALID_ARGUMENT|UNAVAILABLE|DEADLINE_EXCEEDED|NOT_FOUND|RESOURCE_EXHAUSTED|high demand|overloaded|Deadline expired)\b/i.test(
       msg
     )
   );
 }
 
 /**
- * Default browser transport using @google/genai SDK directly with the visitor's key.
- * Uses AbortSignal for client-side timeout cancellation without setting httpOptions.timeout
- * (which in @google/genai 2.31.0 sends an X-Server-Timeout header that triggers HTTP 400 on <10s
- * budgets and premature HTTP 504 DEADLINE_EXCEEDED responses).
+ * Default transport that routes browser requests through the server-side `/api/gemini/generate`
+ * endpoint (eliminating `PROXY_GENERATION_DISABLED: generateContent is not supported` in AI Studio's
+ * browser preview iframe) while supporting direct Node.js SDK execution in CLI/Node test contexts.
  */
 export const defaultGeminiTransport: LlmTransportFn = async (
   params: RawLlmCallParams
@@ -114,27 +139,88 @@ export const defaultGeminiTransport: LlmTransportFn = async (
     throw invalidErr;
   }
 
+  // In the browser, call the Express server-side proxy (/api/gemini/generate)
+  // so @google/genai runs server-side and never triggers PROXY_GENERATION_DISABLED.
+  if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
+    const response = await window.fetch('/api/gemini/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        apiKey: cleanKey,
+        systemInstruction: params.systemInstruction,
+        userContent: params.userContent,
+        schemaOverride: params.schemaOverride,
+      }),
+      signal: params.abortSignal,
+    });
+
+    let payload: {
+      ok?: boolean;
+      rawText?: string;
+      finishReason?: string | null;
+      status?: number;
+      message?: string;
+    } | null = null;
+
+    try {
+      payload = (await response.json()) as {
+        ok?: boolean;
+        rawText?: string;
+        finishReason?: string | null;
+        status?: number;
+        message?: string;
+      };
+    } catch {
+      payload = null;
+    }
+
+    if (response.ok && payload && payload.ok) {
+      return {
+        rawText: typeof payload.rawText === 'string' ? payload.rawText : '',
+        finishReason: payload.finishReason ?? 'STOP',
+      };
+    }
+
+    const errStatus = payload?.status ?? response.status ?? 500;
+    const errMsg =
+      payload?.message ??
+      `Gemini proxy request failed with HTTP ${response.status}.`;
+    const proxyErr = new Error(errMsg) as Error & { status?: number };
+    proxyErr.status = errStatus;
+    throw proxyErr;
+  }
+
   const ai = new GoogleGenAI({
     apiKey: cleanKey,
     httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
       retryOptions: {
         attempts: 1,
       },
     },
   });
 
-  // Pass abortSignal only (do not pass timeoutMs into httpOptions so the SDK does not
-  // attach the X-Server-Timeout header, which causes 400/504 errors on Google's proxy).
-  const config = buildGenerationConfig(
-    params.systemInstruction,
-    params.schemaOverride,
-    {
-      abortSignal: params.abortSignal,
-    }
-  );
-
   const modelsToTry = [GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS];
   let lastErr: unknown;
+
+  const extractResponseOutput = (response: {
+    text?: string | (() => string);
+    candidates?: Array<{ finishReason?: unknown }>;
+  }): RawLlmCallOutput => {
+    const rawText =
+      typeof response.text === 'function'
+        ? (response.text as () => string)()
+        : (response.text ?? '');
+    const finishReason =
+      response.candidates && response.candidates.length > 0
+        ? String(response.candidates[0]?.finishReason ?? 'STOP')
+        : null;
+    return { rawText, finishReason };
+  };
 
   for (let i = 0; i < modelsToTry.length; i++) {
     if (params.abortSignal?.aborted) {
@@ -142,35 +228,81 @@ export const defaultGeminiTransport: LlmTransportFn = async (
     }
     const candidateModel = modelsToTry[i];
     try {
+      const config = buildGenerationConfig(
+        params.systemInstruction,
+        params.schemaOverride,
+        {
+          abortSignal: params.abortSignal,
+        }
+      );
       const response = await ai.models.generateContent({
         model: candidateModel,
         contents: params.userContent,
         config,
       });
-
-      const rawText =
-        typeof response.text === 'function'
-          ? (response.text as () => string)()
-          : (response.text ?? '');
-      const finishReason =
-        response.candidates && response.candidates.length > 0
-          ? String(response.candidates[0]?.finishReason ?? 'STOP')
-          : null;
-
-      return {
-        rawText,
-        finishReason,
-      };
+      return extractResponseOutput(response);
     } catch (err) {
       lastErr = err;
+
+      // If this model rejected thinkingConfig or responseSchema with a non-key 400 error,
+      // immediately retry once on the same model without thinkingConfig (and then without responseSchema)
+      if (!params.abortSignal?.aborted && isNonKey400Error(err)) {
+        const { msg } = extractStatusAndMessage(err);
+        const isModelNotFound400 =
+          /\b(?:model.*not found|not supported for generateContent|unknown model)\b/i.test(
+            msg
+          );
+        if (!isModelNotFound400) {
+          try {
+            const fallbackConfigNoThinking = buildGenerationConfig(
+              params.systemInstruction,
+              params.schemaOverride,
+              {
+                abortSignal: params.abortSignal,
+                omitThinkingConfig: true,
+              }
+            );
+            const retryRes = await ai.models.generateContent({
+              model: candidateModel,
+              contents: params.userContent,
+              config: fallbackConfigNoThinking,
+            });
+            return extractResponseOutput(retryRes);
+          } catch (retryErr1) {
+            lastErr = retryErr1;
+            if (!params.abortSignal?.aborted && isNonKey400Error(retryErr1)) {
+              try {
+                const fallbackConfigJsonOnly = buildGenerationConfig(
+                  params.systemInstruction,
+                  params.schemaOverride,
+                  {
+                    abortSignal: params.abortSignal,
+                    omitThinkingConfig: true,
+                    omitResponseSchema: true,
+                  }
+                );
+                const retryRes2 = await ai.models.generateContent({
+                  model: candidateModel,
+                  contents: params.userContent,
+                  config: fallbackConfigJsonOnly,
+                });
+                return extractResponseOutput(retryRes2);
+              } catch (retryErr2) {
+                lastErr = retryErr2;
+              }
+            }
+          }
+        }
+      }
+
       if (
         i < modelsToTry.length - 1 &&
         !params.abortSignal?.aborted &&
-        shouldTryFallbackModel(err)
+        shouldTryFallbackModel(lastErr)
       ) {
         continue;
       }
-      throw err;
+      throw lastErr;
     }
   }
 
@@ -283,17 +415,7 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
     };
   }
 
-  const msg = err instanceof Error ? err.message : String(err ?? '');
-  const errObj =
-    typeof err === 'object' && err !== null
-      ? (err as Record<string, unknown>)
-      : {};
-  const rawStatus =
-    typeof errObj.status === 'number'
-      ? errObj.status
-      : typeof errObj.statusCode === 'number'
-        ? errObj.statusCode
-        : null;
+  const { status: rawStatus, msg } = extractStatusAndMessage(err);
 
   if (
     rawStatus === 504 ||
@@ -335,19 +457,14 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
     }
   }
 
-  const is401or403 =
-    rawStatus === 401 ||
-    rawStatus === 403 ||
-    /\b(?:401|403|API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED|invalid api key)\b/i.test(
-      msg
-    );
-  if (is401or403) {
+  if (isApiKeyAuthError(rawStatus, msg)) {
     return {
       httpStatus: rawStatus ?? 401,
       retryable: false,
       retryAfterMs: null,
       category: 'invalid_key',
-      safeMessage: 'Invalid key (401/403): the Gemini API rejected this key.',
+      safeMessage:
+        'Invalid key (401/403): the Gemini API rejected this key. Please verify that your Google AI Studio API key is active and valid.',
     };
   }
 
@@ -402,7 +519,7 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
 
   const is404 =
     rawStatus === 404 ||
-    /\b(?:404|NOT_FOUND|model.*not found|is not found for API version|not supported for generateContent)\b/i.test(
+    /\b(?:404|NOT_FOUND|model.*not found|is not found for API version|not supported for generateContent|no longer available to new users)\b/i.test(
       msg
     );
   if (is404) {
@@ -417,7 +534,7 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
 
   const is400 =
     rawStatus === 400 ||
-    /\b(?:400|INVALID_ARGUMENT|response_schema|responseSchema|response_mime_type|responseMimeType|responseFormat|schema)\b/i.test(
+    /\b(?:400|INVALID_ARGUMENT|response_schema|responseSchema|response_mime_type|responseMimeType|responseFormat)\b/i.test(
       msg
     );
   if (is400) {
@@ -754,6 +871,8 @@ export async function connectAndVerifyApiKey(
             transport,
             {
               apiKey: trimmed,
+              systemInstruction:
+                'Return only the exact JSON object {"ok": true}.',
               userContent: 'Respond with JSON {"ok": true}',
               schemaOverride: CONNECT_PROBE_SCHEMA,
             },

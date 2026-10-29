@@ -1157,16 +1157,134 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
     }
   };
 
-  const assistantTurns = sessionState.turns.filter(
-    (t): t is AssistantConversationTurn => t.role === 'assistant'
-  );
-  const latestAssistantTurn =
-    assistantTurns.length > 0
-      ? assistantTurns[assistantTurns.length - 1]
-      : null;
+  const assistantTurnsWithContext = sessionState.turns.reduce<
+    Array<{
+      turnIndex: number;
+      assistantTurn: AssistantConversationTurn;
+      userQuestion: string;
+    }>
+  >((acc, turn, idx) => {
+    if (turn.role === 'assistant') {
+      let userQuestion = 'Diagnostic query';
+      for (let i = idx - 1; i >= 0; i--) {
+        const prev = sessionState.turns[i];
+        if (prev && prev.role === 'user') {
+          userQuestion = prev.question;
+          break;
+        }
+      }
+      acc.push({
+        turnIndex: acc.length + 1,
+        assistantTurn: turn,
+        userQuestion,
+      });
+    }
+    return acc;
+  }, []);
+
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const [timelineViewMode, setTimelineViewMode] = useState<
+    'waterfall' | 'session_comparison'
+  >('waterfall');
+
+  const activeTurnEntry =
+    assistantTurnsWithContext.find(
+      (entry) => entry.assistantTurn.id === selectedTurnId
+    ) ??
+    (assistantTurnsWithContext.length > 0
+      ? assistantTurnsWithContext[assistantTurnsWithContext.length - 1]
+      : null);
+
+  const latestAssistantTurn = activeTurnEntry?.assistantTurn ?? null;
   const latestTrace: PipelineStageTrace[] = latestAssistantTurn?.trace ?? [];
   const latestPerf = latestAssistantTurn?.performanceTelemetry ?? null;
   const lastProbe = getLastProbeTelemetry();
+
+  // Compute timeline metrics for the active turn
+  const totalTurnMs = Math.max(
+    1,
+    latestPerf?.totalLatencyMs ??
+      latestAssistantTurn?.latencyMs ??
+      latestTrace.reduce((sum, st) => sum + st.durationMs, 0)
+  );
+
+  const aiPromptRoundMs =
+    latestPerf?.totalLlmDurationMs ??
+    latestTrace
+      .filter((st) => st.stage === 'LLM_CALL' || st.stage === 'REPAIR_ATTEMPT')
+      .reduce((sum, st) => sum + st.durationMs, 0);
+
+  const sqlStaticMs =
+    latestPerf?.sqlStaticValidationDurationMs ??
+    latestTrace
+      .filter((st) => st.stage === 'SQL_VALIDATOR')
+      .reduce((sum, st) => sum + st.durationMs, 0);
+
+  const sqlDryRunMs =
+    latestPerf?.sqliteDryRunDurationMs ??
+    latestTrace
+      .filter((st) => st.stage === 'DRY_RUN')
+      .reduce((sum, st) => sum + st.durationMs, 0);
+
+  const sqlExecMs =
+    latestPerf?.sqliteExecutionDurationMs ??
+    latestTrace
+      .filter((st) => st.stage === 'WORKER_EXECUTE')
+      .reduce((sum, st) => sum + st.durationMs, 0);
+
+  const totalSqlMs = sqlStaticMs + sqlDryRunMs + sqlExecMs;
+  const prepAndParseMs = Math.max(
+    0,
+    totalTurnMs - aiPromptRoundMs - totalSqlMs
+  );
+
+  const aiSharePct = latestAssistantTurn
+    ? Math.min(100, Math.round((aiPromptRoundMs / totalTurnMs) * 100))
+    : 0;
+  const sqlSharePct = latestAssistantTurn
+    ? Math.min(100, Math.round((totalSqlMs / totalTurnMs) * 100))
+    : 0;
+  const prepSharePct = latestAssistantTurn
+    ? Math.max(0, 100 - aiSharePct - sqlSharePct)
+    : 0;
+
+  // Build cumulative waterfall offsets for each stage in latestTrace
+  let runningOffsetMs = 0;
+  const waterfallItems = latestTrace.map((st, index) => {
+    const startMs = runningOffsetMs;
+    const durationMs = Math.max(0, st.durationMs);
+    runningOffsetMs += durationMs;
+
+    const category: 'ai' | 'sql' | 'guard' =
+      st.stage === 'LLM_CALL' || st.stage === 'REPAIR_ATTEMPT'
+        ? 'ai'
+        : st.stage === 'SQL_VALIDATOR' ||
+            st.stage === 'DRY_RUN' ||
+            st.stage === 'WORKER_EXECUTE'
+          ? 'sql'
+          : 'guard';
+
+    return {
+      index,
+      stage: st.stage,
+      status: st.status,
+      detail: st.detail,
+      startMs,
+      durationMs,
+      category,
+    };
+  });
+  const waterfallTotalSpanMs = Math.max(1, runningOffsetMs, totalTurnMs);
+
+  const maxSessionTurnLatencyMs = Math.max(
+    1,
+    ...assistantTurnsWithContext.map(
+      (entry) =>
+        entry.assistantTurn.performanceTelemetry?.totalLatencyMs ??
+        entry.assistantTurn.latencyMs ??
+        1
+    )
+  );
 
   const handleDownloadAuditLog = () => {
     const jsonText = auditLog.exportJson();
@@ -1212,10 +1330,10 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
         </div>
       </section>
 
-      {/* Performance & Latency Telemetry Breakdown */}
+      {/* Performance & Latency Telemetry Breakdown + Visual Performance Timeline */}
       <section
         aria-label="Performance and Latency Telemetry"
-        className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-4"
+        className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-5"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -1316,20 +1434,534 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
           </div>
         </div>
 
-        {latestPerf && latestPerf.llmCalls.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-mono text-slate-300">
-            <span className="text-slate-400">Per-Call Gemini Breakdown:</span>
-            {latestPerf.llmCalls.map((call, idx) => (
-              <span
-                key={`${call.phase}_${idx}`}
-                className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 tabular-nums"
+        {/* Visual Performance Timeline: AI Prompt Rounds & SQL Query Execution */}
+        <div
+          aria-label="Visual Performance Timeline"
+          className="rounded-xl border border-slate-800 bg-slate-950/90 p-4 space-y-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-sky-400" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-200">
+                  Visual Performance Timeline · AI Prompt Rounds &amp; SQL Execution
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400">
+                Tracks execution latency across Gemini prompt rounds (ANSWER, JSON_RETRY, REPAIR) and 10-step SQLite validation &amp; worker execution.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {assistantTurnsWithContext.length > 1 && (
+                <div
+                  role="group"
+                  aria-label="Select conversation turn"
+                  className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800"
+                >
+                  {assistantTurnsWithContext.map((entry) => {
+                    const isSelected =
+                      entry.assistantTurn.id === latestAssistantTurn?.id;
+                    return (
+                      <button
+                        key={entry.assistantTurn.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedTurnId(entry.assistantTurn.id)
+                        }
+                        className={`px-2 py-1 text-[11px] font-mono rounded transition-colors tabular-nums ${
+                          isSelected
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 font-semibold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title={entry.userQuestion}
+                      >
+                        Turn #{entry.turnIndex}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div
+                role="group"
+                aria-label="Timeline view mode"
+                className="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs"
               >
-                #{idx + 1} {call.phase}: {call.durationMs}ms (retries=
-                {call.transportRetriesUsed}, backoff={call.retryDelayMs}ms)
-              </span>
-            ))}
+                <button
+                  type="button"
+                  onClick={() => setTimelineViewMode('waterfall')}
+                  className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                    timelineViewMode === 'waterfall'
+                      ? 'bg-slate-800 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Turn Breakdown
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimelineViewMode('session_comparison')}
+                  className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                    timelineViewMode === 'session_comparison'
+                      ? 'bg-slate-800 text-slate-100'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Session History ({assistantTurnsWithContext.length})
+                </button>
+              </div>
+            </div>
           </div>
-        )}
+
+          {!latestAssistantTurn ? (
+            <div className="py-6 text-center space-y-2">
+              <p className="text-xs text-slate-400">
+                No SQL queries or AI prompt rounds recorded yet in this session.
+              </p>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Submit a question in Ask Data or click &ldquo;Run Test Prompt&rdquo; below to populate the live execution timeline.
+              </p>
+            </div>
+          ) : timelineViewMode === 'session_comparison' ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
+                <span>
+                  Comparing {assistantTurnsWithContext.length} turn(s) · Peak turn latency: {maxSessionTurnLatencyMs} ms
+                </span>
+                <div className="flex items-center gap-4">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-sky-500 inline-block" />
+                    AI Prompt Rounds
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block" />
+                    SQL Validation &amp; Exec
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-slate-600 inline-block" />
+                    Guard &amp; Parse
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {assistantTurnsWithContext.map((entry) => {
+                  const perf = entry.assistantTurn.performanceTelemetry;
+                  const turnTotal = Math.max(
+                    1,
+                    perf?.totalLatencyMs ?? entry.assistantTurn.latencyMs ?? 1
+                  );
+                  const turnAiMs = perf?.totalLlmDurationMs ?? 0;
+                  const turnSqlMs =
+                    (perf?.sqlStaticValidationDurationMs ?? 0) +
+                    (perf?.sqliteDryRunDurationMs ?? 0) +
+                    (perf?.sqliteExecutionDurationMs ?? 0);
+                  const turnOtherMs = Math.max(
+                    0,
+                    turnTotal - turnAiMs - turnSqlMs
+                  );
+
+                  const scalePct = Math.max(
+                    6,
+                    Math.min(
+                      100,
+                      Math.round((turnTotal / maxSessionTurnLatencyMs) * 100)
+                    )
+                  );
+                  const aiW = Math.round((turnAiMs / turnTotal) * 100);
+                  const sqlW = Math.round((turnSqlMs / turnTotal) * 100);
+                  const otherW = Math.max(0, 100 - aiW - sqlW);
+
+                  return (
+                    <button
+                      key={entry.assistantTurn.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTurnId(entry.assistantTurn.id);
+                        setTimelineViewMode('waterfall');
+                      }}
+                      className="w-full text-left rounded-lg border border-slate-800/90 bg-slate-900/60 hover:bg-slate-900 p-3 space-y-2 transition-colors"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-sky-400 font-semibold tabular-nums">
+                            #{entry.turnIndex}
+                          </span>
+                          <span className="text-slate-200 truncate max-w-md">
+                            {entry.userQuestion}
+                          </span>
+                          <span className="font-mono text-[11px] text-slate-400">
+                            · {entry.assistantTurn.response.status}
+                          </span>
+                        </div>
+                        <div className="font-mono text-[11px] text-slate-300 tabular-nums">
+                          AI: {turnAiMs} ms · SQL: {turnSqlMs} ms · Total:{' '}
+                          <span className="text-sky-300 font-semibold">
+                            {turnTotal} ms
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden p-0.5 border border-slate-800/80">
+                        <div
+                          className="h-full flex rounded-full overflow-hidden"
+                          style={{ width: `${scalePct}%` }}
+                        >
+                          {turnAiMs > 0 && (
+                            <div
+                              className="bg-sky-500 h-full"
+                              style={{ width: `${Math.max(4, aiW)}%` }}
+                              title={`AI Prompt Rounds: ${turnAiMs} ms`}
+                            />
+                          )}
+                          {turnSqlMs > 0 && (
+                            <div
+                              className="bg-emerald-500 h-full"
+                              style={{ width: `${Math.max(4, sqlW)}%` }}
+                              title={`SQL Validation & Execution: ${turnSqlMs} ms`}
+                            />
+                          )}
+                          {turnOtherMs > 0 && (
+                            <div
+                              className="bg-slate-600 h-full"
+                              style={{ width: `${Math.max(2, otherW)}%` }}
+                              title={`Input Guard & Prompt Build: ${turnOtherMs} ms`}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Active Turn Summary Bar */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-sky-400 font-semibold tabular-nums">
+                      Turn #{activeTurnEntry?.turnIndex ?? 1}
+                    </span>
+                    <span className="text-slate-200 font-medium truncate max-w-xl">
+                      &ldquo;{activeTurnEntry?.userQuestion}&rdquo;
+                    </span>
+                    <span className="font-mono text-[11px] text-slate-400">
+                      · {latestAssistantTurn.response.status}
+                    </span>
+                  </div>
+                  <div className="font-mono text-xs text-slate-300 tabular-nums">
+                    Total Execution:{' '}
+                    <span className="text-sky-300 font-semibold">
+                      {totalTurnMs} ms
+                    </span>{' '}
+                    <span className="text-slate-500">
+                      / {PER_QUESTION_DEADLINE_MS} ms deadline
+                    </span>
+                  </div>
+                </div>
+
+                {/* Proportional Split Bar */}
+                <div
+                  aria-label="Execution time proportion bar"
+                  className="h-3.5 w-full rounded-lg bg-slate-900 border border-slate-800 overflow-hidden flex p-0.5 gap-0.5"
+                >
+                  {aiPromptRoundMs > 0 && (
+                    <div
+                      className="h-full bg-sky-500 rounded-l-sm transition-all"
+                      style={{ width: `${Math.max(4, aiSharePct)}%` }}
+                      title={`AI Prompt Rounds: ${aiPromptRoundMs} ms (${aiSharePct}%)`}
+                    />
+                  )}
+                  {totalSqlMs > 0 && (
+                    <div
+                      className="h-full bg-emerald-500 transition-all"
+                      style={{ width: `${Math.max(4, sqlSharePct)}%` }}
+                      title={`SQL Validation & Execution: ${totalSqlMs} ms (${sqlSharePct}%)`}
+                    />
+                  )}
+                  {prepAndParseMs > 0 && (
+                    <div
+                      className="h-full bg-slate-600 rounded-r-sm transition-all"
+                      style={{ width: `${Math.max(3, prepSharePct)}%` }}
+                      title={`Input Guard, Prompt Build & JSON Parse: ${prepAndParseMs} ms (${prepSharePct}%)`}
+                    />
+                  )}
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] font-mono text-slate-400 pt-0.5">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-sky-500 inline-block" />
+                      <span className="text-slate-200">AI Prompt Rounds:</span>{' '}
+                      <span className="tabular-nums text-sky-300 font-semibold">
+                        {aiPromptRoundMs} ms
+                      </span>{' '}
+                      ({aiSharePct}%)
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block" />
+                      <span className="text-slate-200">
+                        SQL Validation &amp; Execution:
+                      </span>{' '}
+                      <span className="tabular-nums text-emerald-300 font-semibold">
+                        {totalSqlMs} ms
+                      </span>{' '}
+                      ({sqlSharePct}%)
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-slate-600 inline-block" />
+                      <span className="text-slate-200">
+                        Guard, Prompt &amp; Parse:
+                      </span>{' '}
+                      <span className="tabular-nums text-slate-300">
+                        {prepAndParseMs} ms
+                      </span>{' '}
+                      ({prepSharePct}%)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Dual-Track Detail Grid: AI Prompt Rounds Track vs SQL Query Track */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-1">
+                {/* Track 1: AI Prompt Rounds Track */}
+                <div className="rounded-lg border border-slate-800/90 bg-slate-900/50 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-sky-300 font-mono">
+                      1. AI Prompt Rounds ({latestPerf?.llmCalls.length ?? 0} round
+                      {(latestPerf?.llmCalls.length ?? 0) === 1 ? '' : 's'})
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                      Budget: {PER_REQUEST_TIMEOUT_MS} ms / round
+                    </span>
+                  </div>
+
+                  {!latestPerf || latestPerf.llmCalls.length === 0 ? (
+                    <div className="text-xs font-mono text-slate-400 py-3">
+                      0 ms · Deterministic Input Guard handled this turn without invoking Gemini.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {latestPerf.llmCalls.map((call, idx) => {
+                        const widthPct = Math.max(
+                          5,
+                          Math.min(
+                            100,
+                            Math.round((call.durationMs / totalTurnMs) * 100)
+                          )
+                        );
+                        const budgetPct = Math.min(
+                          100,
+                          Math.round(
+                            (call.durationMs / PER_REQUEST_TIMEOUT_MS) * 100
+                          )
+                        );
+                        const barColor =
+                          call.phase === 'REPAIR'
+                            ? 'bg-amber-400'
+                            : call.phase === 'JSON_RETRY'
+                              ? 'bg-indigo-400'
+                              : 'bg-sky-400';
+
+                        return (
+                          <div
+                            key={`${call.phase}_${idx}`}
+                            className="space-y-1 text-xs font-mono"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-slate-200 font-medium">
+                                Round #{idx + 1} · {call.phase}
+                              </span>
+                              <span className="tabular-nums text-slate-300">
+                                <span className="font-semibold text-sky-300">
+                                  {call.durationMs} ms
+                                </span>{' '}
+                                <span className="text-slate-500">
+                                  ({budgetPct}% of 25s cap)
+                                </span>
+                              </span>
+                            </div>
+                            <div className="h-2 w-full rounded-full bg-slate-950 overflow-hidden border border-slate-800/80">
+                              <div
+                                className={`h-full rounded-full ${barColor}`}
+                                style={{ width: `${widthPct}%` }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 tabular-nums">
+                              <span>
+                                transportRetries={call.transportRetriesUsed}
+                              </span>
+                              <span>backoffDelay={call.retryDelayMs} ms</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Track 2: SQL Query Validation & Execution Track */}
+                <div className="rounded-lg border border-slate-800/90 bg-slate-900/50 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-emerald-300 font-mono">
+                      2. SQL Query Pipeline ({totalSqlMs} ms total)
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                      {latestAssistantTurn.executionResult
+                        ? `${latestAssistantTurn.executionResult.rowCount} row(s) returned`
+                        : '0 queries executed'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5 text-xs font-mono">
+                    {[
+                      {
+                        label: 'Steps 1–8 · AST Static Validation',
+                        ms: sqlStaticMs,
+                        barClass: 'bg-teal-400',
+                        note:
+                          sqlStaticMs > 0 ||
+                          latestTrace.some((t) => t.stage === 'SQL_VALIDATOR')
+                            ? 'Read-only SELECT, allowlist & sensitive-column check'
+                            : 'Skipped (non-SQL turn)',
+                      },
+                      {
+                        label: 'Step 9 · SQLite EXPLAIN QUERY PLAN Dry-Run',
+                        ms: sqlDryRunMs,
+                        barClass: 'bg-emerald-400',
+                        note:
+                          sqlDryRunMs > 0 ||
+                          latestTrace.some((t) => t.stage === 'DRY_RUN')
+                            ? 'Verified query plan in SQLite Worker'
+                            : 'Not reached',
+                      },
+                      {
+                        label: 'Step 10 · SQLite Web Worker Execution',
+                        ms: sqlExecMs,
+                        barClass: 'bg-emerald-500',
+                        note: latestAssistantTurn.executionResult
+                          ? `Executed in ${latestAssistantTurn.executionResult.executionTimeMs} ms · ${latestAssistantTurn.executionResult.columns.length} cols`
+                          : 'Zero queries executed on CLARIFY/REJECT',
+                      },
+                    ].map((sqlPhase) => {
+                      const pct =
+                        totalSqlMs > 0
+                          ? Math.max(
+                              sqlPhase.ms > 0 ? 6 : 0,
+                              Math.min(
+                                100,
+                                Math.round((sqlPhase.ms / Math.max(1, totalSqlMs)) * 100)
+                              )
+                            )
+                          : 0;
+                      return (
+                        <div key={sqlPhase.label} className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-200">
+                              {sqlPhase.label}
+                            </span>
+                            <span className="tabular-nums font-semibold text-emerald-300">
+                              {sqlPhase.ms} ms
+                            </span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-slate-950 overflow-hidden border border-slate-800/80">
+                            <div
+                              className={`h-full rounded-full ${sqlPhase.barClass}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {sqlPhase.note}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Chronological Stage Waterfall */}
+              {waterfallItems.length > 0 && (
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                    <span>
+                      Chronological Pipeline Waterfall (0 ms → {waterfallTotalSpanMs} ms)
+                    </span>
+                    <span>Offset · Duration</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {waterfallItems.map((item) => {
+                      const leftPct = Math.min(
+                        94,
+                        Math.round((item.startMs / waterfallTotalSpanMs) * 100)
+                      );
+                      const widthPct = Math.max(
+                        2,
+                        Math.min(
+                          100 - leftPct,
+                          Math.round(
+                            (item.durationMs / waterfallTotalSpanMs) * 100
+                          )
+                        )
+                      );
+                      const barClass =
+                        item.status === 'failed'
+                          ? 'bg-rose-500'
+                          : item.category === 'ai'
+                            ? 'bg-sky-400'
+                            : item.category === 'sql'
+                              ? 'bg-emerald-400'
+                              : 'bg-slate-400';
+
+                      return (
+                        <div
+                          key={`${item.stage}_${item.index}`}
+                          className="grid grid-cols-12 items-center gap-2 text-[11px] font-mono"
+                        >
+                          <div className="col-span-4 sm:col-span-3 truncate text-slate-300">
+                            <span
+                              className={
+                                item.status === 'failed'
+                                  ? 'text-rose-400'
+                                  : item.category === 'ai'
+                                    ? 'text-sky-300'
+                                    : item.category === 'sql'
+                                      ? 'text-emerald-300'
+                                      : 'text-slate-400'
+                              }
+                            >
+                              {item.stage}
+                            </span>
+                          </div>
+                          <div className="col-span-5 sm:col-span-6 h-2.5 rounded bg-slate-900 border border-slate-800/80 relative overflow-hidden">
+                            <div
+                              className={`absolute top-0 bottom-0 rounded ${barClass}`}
+                              style={{
+                                left: `${leftPct}%`,
+                                width: `${widthPct}%`,
+                              }}
+                              title={`${item.stage}: +${item.startMs} ms, duration ${item.durationMs} ms (${item.detail})`}
+                            />
+                          </div>
+                          <div className="col-span-3 text-right tabular-nums text-slate-400">
+                            +{item.startMs}ms ·{' '}
+                            <span className="text-slate-200 font-semibold">
+                              {item.durationMs}ms
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </section>
 
 

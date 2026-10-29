@@ -1,8 +1,15 @@
-import { Type, type GenerateContentConfig, type Schema } from '@google/genai';
+import {
+  ThinkingLevel,
+  Type,
+  type GenerateContentConfig,
+  type Schema,
+} from '@google/genai';
 
-export const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+export const GEMINI_MODEL = 'gemini-3-flash-preview';
 export const FALLBACK_GEMINI_MODELS = [
-  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
   'gemini-flash-lite-latest',
   'gemini-flash-latest',
 ] as const;
@@ -102,6 +109,8 @@ export const CONNECT_PROBE_SCHEMA: Schema = {
 export interface GenerationConfigOptions {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  omitThinkingConfig?: boolean;
+  omitResponseSchema?: boolean;
 }
 
 export function buildGenerationConfig(
@@ -112,7 +121,16 @@ export function buildGenerationConfig(
   const config: GenerateContentConfig = {
     temperature: 0.1,
     responseMimeType: 'application/json',
-    responseSchema: schemaOverride ?? VIMARSH_RESPONSE_SCHEMA,
+    ...(options?.omitResponseSchema
+      ? {}
+      : { responseSchema: schemaOverride ?? VIMARSH_RESPONSE_SCHEMA }),
+    ...(options?.omitThinkingConfig
+      ? {}
+      : {
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL,
+          },
+        }),
     httpOptions: {
       retryOptions: {
         attempts: 1,
@@ -130,4 +148,5 @@ export function buildGenerationConfig(
   }
   return config;
 }
+
 
