@@ -17,6 +17,7 @@ import {
   buildGenerationConfig,
   CONNECT_PROBE_SCHEMA,
   CONNECT_PROBE_TIMEOUT_MS,
+  FALLBACK_GEMINI_MODELS,
   GEMINI_MODEL,
   MAX_RETRY_AFTER_CAP_MS,
   PER_REQUEST_TIMEOUT_MS,
@@ -49,53 +50,133 @@ export interface RawLlmCallOutput {
 export type LlmTransportFn = (params: RawLlmCallParams) => Promise<RawLlmCallOutput>;
 
 /**
+ * Strips invisible zero-width characters, surrounding quotes, and whitespace
+ * that can cause browser fetch() Headers.append('x-goog-api-key', ...) to throw a TypeError.
+ */
+export function sanitizeApiKey(rawKey: string): string {
+  return (rawKey ?? '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '')
+    .trim()
+    .replace(/^["']+|["']+$/g, '')
+    .trim();
+}
+
+function isValidHeaderAsciiKey(key: string): boolean {
+  return key.length > 0 && /^[\x21-\x7E]+$/.test(key);
+}
+
+function shouldTryFallbackModel(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  const errObj =
+    typeof err === 'object' && err !== null
+      ? (err as Record<string, unknown>)
+      : {};
+  const status =
+    typeof errObj.status === 'number'
+      ? errObj.status
+      : typeof errObj.statusCode === 'number'
+        ? errObj.statusCode
+        : null;
+  if (status === 401 || status === 403) {
+    return false;
+  }
+  if (/\b(?:API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED|invalid api key)\b/i.test(msg)) {
+    return false;
+  }
+  return (
+    status === 404 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    /\b(?:404|429|500|502|503|504|UNAVAILABLE|DEADLINE_EXCEEDED|NOT_FOUND|RESOURCE_EXHAUSTED|high demand|overloaded|Deadline expired)\b/i.test(
+      msg
+    )
+  );
+}
+
+/**
  * Default browser transport using @google/genai SDK directly with the visitor's key.
- * Configures httpOptions.retryOptions.attempts = 1 and abortSignal/timeout so each
- * transport invocation performs exactly 1 bounded HTTP request to GEMINI_MODEL.
+ * Uses AbortSignal for client-side timeout cancellation without setting httpOptions.timeout
+ * (which in @google/genai 2.31.0 sends an X-Server-Timeout header that triggers HTTP 400 on <10s
+ * budgets and premature HTTP 504 DEADLINE_EXCEEDED responses).
  */
 export const defaultGeminiTransport: LlmTransportFn = async (
   params: RawLlmCallParams
 ): Promise<RawLlmCallOutput> => {
+  const cleanKey = sanitizeApiKey(params.apiKey);
+  if (!isValidHeaderAsciiKey(cleanKey)) {
+    const invalidErr = new Error(
+      '401 API_KEY_INVALID: API key contains invalid characters.'
+    ) as Error & { status?: number };
+    invalidErr.status = 401;
+    throw invalidErr;
+  }
+
   const ai = new GoogleGenAI({
-    apiKey: params.apiKey,
+    apiKey: cleanKey,
     httpOptions: {
       retryOptions: {
         attempts: 1,
       },
-      ...(params.timeoutMs !== undefined && params.timeoutMs > 0
-        ? { timeout: Math.ceil(params.timeoutMs) }
-        : {}),
     },
   });
 
+  // Pass abortSignal only (do not pass timeoutMs into httpOptions so the SDK does not
+  // attach the X-Server-Timeout header, which causes 400/504 errors on Google's proxy).
   const config = buildGenerationConfig(
     params.systemInstruction,
     params.schemaOverride,
     {
       abortSignal: params.abortSignal,
-      timeoutMs: params.timeoutMs,
     }
   );
 
-  const response = await ai.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: params.userContent,
-    config,
-  });
+  const modelsToTry = [GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS];
+  let lastErr: unknown;
 
-  const rawText =
-    typeof response.text === 'function'
-      ? (response.text as () => string)()
-      : (response.text ?? '');
-  const finishReason =
-    response.candidates && response.candidates.length > 0
-      ? String(response.candidates[0]?.finishReason ?? 'STOP')
-      : null;
+  for (let i = 0; i < modelsToTry.length; i++) {
+    if (params.abortSignal?.aborted) {
+      throw new DOMException('Request aborted', 'AbortError');
+    }
+    const candidateModel = modelsToTry[i];
+    try {
+      const response = await ai.models.generateContent({
+        model: candidateModel,
+        contents: params.userContent,
+        config,
+      });
 
-  return {
-    rawText,
-    finishReason,
-  };
+      const rawText =
+        typeof response.text === 'function'
+          ? (response.text as () => string)()
+          : (response.text ?? '');
+      const finishReason =
+        response.candidates && response.candidates.length > 0
+          ? String(response.candidates[0]?.finishReason ?? 'STOP')
+          : null;
+
+      return {
+        rawText,
+        finishReason,
+      };
+    } catch (err) {
+      lastErr = err;
+      if (
+        i < modelsToTry.length - 1 &&
+        !params.abortSignal?.aborted &&
+        shouldTryFallbackModel(err)
+      ) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error('Gemini request failed.');
 };
 
 export interface ClassifiedApiError {
@@ -203,10 +284,23 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
   }
 
   const msg = err instanceof Error ? err.message : String(err ?? '');
+  const errObj =
+    typeof err === 'object' && err !== null
+      ? (err as Record<string, unknown>)
+      : {};
+  const rawStatus =
+    typeof errObj.status === 'number'
+      ? errObj.status
+      : typeof errObj.statusCode === 'number'
+        ? errObj.statusCode
+        : null;
 
-  if (/timed?\s*out|timeout|deadline exceeded/i.test(msg)) {
+  if (
+    rawStatus === 504 ||
+    /timed?\s*out|timeout|deadline[_\s]+exceeded|deadline\s+expired/i.test(msg)
+  ) {
     return {
-      httpStatus: null,
+      httpStatus: rawStatus === 504 ? 504 : null,
       retryable: false,
       retryAfterMs: null,
       category: 'timeout',
@@ -227,18 +321,6 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
       safeMessage: 'Request was cancelled or timed out.',
     };
   }
-
-
-  const errObj =
-    typeof err === 'object' && err !== null
-      ? (err as Record<string, unknown>)
-      : {};
-  const rawStatus =
-    typeof errObj.status === 'number'
-      ? errObj.status
-      : typeof errObj.statusCode === 'number'
-        ? errObj.statusCode
-        : null;
 
   // Check for Retry-After in error headers or message
   let retryAfterMs: number | null = null;
@@ -300,14 +382,16 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
     };
   }
 
-  const is503 =
+  const is502or503 =
+    rawStatus === 500 ||
+    rawStatus === 502 ||
     rawStatus === 503 ||
-    /\b(?:503|UNAVAILABLE|overloaded|temporarily unavailable|high demand)\b/i.test(
+    /\b(?:502|503|UNAVAILABLE|BAD_GATEWAY|overloaded|temporarily unavailable|high demand)\b/i.test(
       msg
     );
-  if (is503) {
+  if (is502or503) {
     return {
-      httpStatus: 503,
+      httpStatus: rawStatus ?? 503,
       retryable: true,
       retryAfterMs,
       category: 'service_unavailable',
@@ -347,9 +431,15 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
     };
   }
 
+  const isTransientFetchError =
+    err instanceof TypeError &&
+    /failed to fetch|networkerror|load failed|fetch failed|network request failed/i.test(
+      msg
+    );
+
   return {
     httpStatus: rawStatus,
-    retryable: false,
+    retryable: isTransientFetchError,
     retryAfterMs: null,
     category: 'network_error',
     safeMessage:
@@ -601,12 +691,19 @@ export async function connectAndVerifyApiKey(
 
   const runProbe = async (): Promise<ByokConnectionState> => {
     const t0 = performance.now();
-    const trimmed = (candidateKey ?? '').trim();
+    const trimmed = sanitizeApiKey(candidateKey);
     if (trimmed.length === 0) {
       recordProbeTelemetry(t0, 'invalid_key', 0, 0);
       return setConnectionStatus(
         'invalid_key',
         'Invalid key (401/403): please enter a non-empty Gemini API key.'
+      );
+    }
+    if (!isValidHeaderAsciiKey(trimmed)) {
+      recordProbeTelemetry(t0, 'invalid_key', 0, 0);
+      return setConnectionStatus(
+        'invalid_key',
+        'Invalid key (401/403): API key contains invalid or non-ASCII characters. Please paste a valid Gemini API key.'
       );
     }
 

@@ -1,6 +1,11 @@
 import { Type, type GenerateContentConfig, type Schema } from '@google/genai';
 
-export const GEMINI_MODEL = 'gemini-flash-latest';
+export const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+export const FALLBACK_GEMINI_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-flash-lite-latest',
+  'gemini-flash-latest',
+] as const;
 
 export const CONNECT_PROBE_TIMEOUT_MS = 15_000;
 export const PER_REQUEST_TIMEOUT_MS = 25_000;
