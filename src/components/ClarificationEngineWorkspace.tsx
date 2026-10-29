@@ -212,7 +212,14 @@ function buildFactualResultSummary(execResult?: QueryExecutionResult): {
  */
 function classifyErrorTurnHeading(reason: string | null): {
   title: string;
-  category: 'cancelled' | 'api_key' | 'quota' | 'network' | 'repair' | 'general';
+  category:
+    | 'cancelled'
+    | 'api_key'
+    | 'quota'
+    | 'service_unavailable'
+    | 'network'
+    | 'repair'
+    | 'general';
 } {
   const text = reason ?? '';
   if (/cancelled|canceled|aborted/i.test(text)) {
@@ -224,7 +231,13 @@ function classifyErrorTurnHeading(reason: string | null): {
   if (/429|quota|rate limit/i.test(text)) {
     return { title: 'API Quota or Rate Limit Reached', category: 'quota' };
   }
-  if (/network error|unavailable|503|404/i.test(text)) {
+  if (/\b503\b|temporarily unavailable|overloaded|high demand/i.test(text)) {
+    return {
+      title: 'Gemini Service Temporarily Unavailable (503)',
+      category: 'service_unavailable',
+    };
+  }
+  if (/network error|unavailable|404/i.test(text)) {
     return { title: 'Gemini API Connection Error', category: 'network' };
   }
   if (/repair attempts|verified safe query/i.test(text)) {
@@ -758,6 +771,31 @@ export const ClarificationEngineWorkspace: React.FC<
                       </p>
                     </div>
 
+                    {aTurn.processingError &&
+                      errorClassification?.category ===
+                        'service_unavailable' && (
+                        <div
+                          role="alert"
+                          aria-label="503 Service Unavailable Recovery Details"
+                          className="rounded-lg border border-amber-700/70 bg-amber-950/35 p-3.5 text-xs text-slate-200 space-y-1.5"
+                        >
+                          <div className="font-semibold text-amber-200">
+                            What happened &amp; how to recover without reloading
+                          </div>
+                          <p className="text-slate-300 leading-relaxed">
+                            Google&apos;s Gemini service returned HTTP 503
+                            (Service Unavailable) due to a temporary capacity
+                            spike. Vimarsh automatically retried your request
+                            with exponential backoff and executed 0 SQL queries
+                            to keep your session clean. Click{' '}
+                            <strong className="text-white">
+                              Retry Question
+                            </strong>{' '}
+                            below to re-send your question in place.
+                          </p>
+                        </div>
+                      )}
+
                     {aTurn.processingError && (
                       <div className="flex flex-wrap items-center gap-2.5 pt-1">
                         {prevUserTurn && (
@@ -767,7 +805,7 @@ export const ClarificationEngineWorkspace: React.FC<
                             onClick={() =>
                               void handleAskQuestion(prevUserTurn.question)
                             }
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg border border-sky-500/80 bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
                           >
                             <RefreshCw className="w-3.5 h-3.5" />
                             <span>Retry Question</span>

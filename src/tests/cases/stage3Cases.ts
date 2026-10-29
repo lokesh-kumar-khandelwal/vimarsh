@@ -24,6 +24,10 @@ import {
   setConnectedApiKey,
 } from '../../engine/keyStore';
 import {
+  computeExponentialBackoffMs,
+  connectAndVerifyApiKey,
+} from '../../engine/llmClient';
+import {
   buildSystemPrompt,
   buildUserMessage,
 } from '../../engine/promptBuilder';
@@ -691,6 +695,97 @@ export async function runStage3EngineTestCases(
         'queryPipeline executes 1 JSON-format retry nudge, triggers REPAIR on bad SQL, re-validates & executes repaired SQL, overrides tables_used from AST, and records clean auditLog',
         passed,
         `calls=${callIndex}, nudgeSent=${Boolean(nudgeSentOnCall2)}, repairTriggered=${Boolean(repairModeOnCall3)}, repaired=${turnRepaired}, astTables=[${outcome.assistantTurn.validatedTablesUsed.join(', ')}], auditEvents=${testAudit.getEvents().length}`,
+        t0
+      );
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+  }
+
+  // 14. HTTP 503 Service Unavailable exponential backoff & descriptive error state recovery
+  {
+    const t0 = performance.now();
+    const prevKey = getApiKey();
+
+    try {
+      // Check exponential backoff math: base * 2^(attempt-1) and Retry-After precedence
+      const b1 = computeExponentialBackoffMs(1, 500, null);
+      const b2 = computeExponentialBackoffMs(2, 500, null);
+      const b3 = computeExponentialBackoffMs(3, 500, null);
+      const bRetryAfter = computeExponentialBackoffMs(1, 500, 1200);
+      const backoffMathOk =
+        b1 === 500 && b2 === 1000 && b3 === 2000 && bRetryAfter === 1200;
+
+      // Test connectAndVerifyApiKey recovering on retry #2 after two transient 503 errors
+      let connectCalls = 0;
+      const statusMessages: string[] = [];
+      const recovering503Transport = async (): Promise<{
+        rawText: string;
+        finishReason: string | null;
+      }> => {
+        connectCalls += 1;
+        if (connectCalls <= 2) {
+          const err = new Error(
+            '503 UNAVAILABLE: Service temporarily unavailable'
+          ) as Error & { status?: number };
+          err.status = 503;
+          throw err;
+        }
+        return {
+          rawText: '{"ok": true}',
+          finishReason: 'STOP',
+        };
+      };
+
+      const recoveredState = await connectAndVerifyApiKey(
+        'AIzaSyTestRecover503Key8899',
+        recovering503Transport,
+        {
+          baseBackoffMs: 1,
+          onStatusUpdate: (s) => statusMessages.push(s.message),
+        }
+      );
+
+      // Test connectAndVerifyApiKey surfacing descriptive service_unavailable state when all retries fail with 503
+      let exhaustedConnectCalls = 0;
+      const always503Transport = async (): Promise<{
+        rawText: string;
+        finishReason: string | null;
+      }> => {
+        exhaustedConnectCalls += 1;
+        const err = new Error(
+          '503 UNAVAILABLE: The model is overloaded. Please try again later.'
+        ) as Error & { status?: number };
+        err.status = 503;
+        throw err;
+      };
+
+      const exhaustedState = await connectAndVerifyApiKey(
+        'AIzaSyTestExhausted503Key7766',
+        always503Transport,
+        { baseBackoffMs: 1 }
+      );
+
+      const passed =
+        backoffMathOk &&
+        connectCalls === 3 &&
+        recoveredState.status === 'connected' &&
+        recoveredState.last4 === '8899' &&
+        statusMessages.some((m) => m.includes('exponential backoff')) &&
+        exhaustedConnectCalls === 3 &&
+        exhaustedState.status === 'service_unavailable' &&
+        exhaustedState.message.includes('Service temporarily unavailable (503)') &&
+        exhaustedState.message.includes('exponential backoff');
+
+      record(
+        's3_14_exponential_backoff_and_503_recovery',
+        'llmClient retries HTTP 503 Service Unavailable with exponential backoff, recovers on transient spikes, and surfaces a descriptive service_unavailable error state when retries are exhausted',
+        passed,
+        `backoffMathOk=${backoffMathOk} (${b1},${b2},${b3}), recoveredAfterCalls=${connectCalls}, exhaustedStatus=${exhaustedState.status}, message="${exhaustedState.message}"`,
         t0
       );
     } finally {

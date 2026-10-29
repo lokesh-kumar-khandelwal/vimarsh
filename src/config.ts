@@ -1,6 +1,12 @@
 import { Type, type GenerateContentConfig, type Schema } from '@google/genai';
 
-export const GEMINI_MODEL = 'gemini-flash-latest';
+export const GEMINI_MODEL = 'gemini-2.5-flash';
+
+export const GEMINI_FALLBACK_MODELS: ReadonlyArray<string> = [
+  GEMINI_MODEL,
+  'gemini-2.5-flash-lite',
+  'gemini-flash-latest',
+];
 
 export const SQL_JS_VERSION = '1.15.2';
 

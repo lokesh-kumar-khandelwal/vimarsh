@@ -18,6 +18,7 @@ import { GoogleGenAI, type Schema } from '@google/genai';
 import {
   buildGenerationConfig,
   CONNECT_PROBE_SCHEMA,
+  GEMINI_FALLBACK_MODELS,
   GEMINI_MODEL,
 } from '../config';
 import type { ByokConnectionState } from '../types';
@@ -48,6 +49,7 @@ export type LlmTransportFn = (params: RawLlmCallParams) => Promise<RawLlmCallOut
 
 /**
  * Default browser transport using @google/genai SDK directly with the visitor's key.
+ * Automatically fails over across GEMINI_FALLBACK_MODELS on transient 503/404 model errors.
  */
 export const defaultGeminiTransport: LlmTransportFn = async (
   params: RawLlmCallParams
@@ -61,25 +63,48 @@ export const defaultGeminiTransport: LlmTransportFn = async (
     config.abortSignal = params.abortSignal;
   }
 
-  const response = await ai.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: params.userContent,
-    config,
-  });
+  const candidateModels =
+    GEMINI_FALLBACK_MODELS.length > 0 ? GEMINI_FALLBACK_MODELS : [GEMINI_MODEL];
+  let lastError: unknown = null;
 
-  const rawText =
-    typeof response.text === 'function'
-      ? (response.text as () => string)()
-      : (response.text ?? '');
-  const finishReason =
-    response.candidates && response.candidates.length > 0
-      ? String(response.candidates[0]?.finishReason ?? 'STOP')
-      : null;
+  for (let i = 0; i < candidateModels.length; i += 1) {
+    const modelName = candidateModels[i];
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: params.userContent,
+        config,
+      });
 
-  return {
-    rawText,
-    finishReason,
-  };
+      const rawText =
+        typeof response.text === 'function'
+          ? (response.text as () => string)()
+          : (response.text ?? '');
+      const finishReason =
+        response.candidates && response.candidates.length > 0
+          ? String(response.candidates[0]?.finishReason ?? 'STOP')
+          : null;
+
+      return {
+        rawText,
+        finishReason,
+      };
+    } catch (err) {
+      lastError = err;
+      const classified = classifyGeminiError(err);
+      const canTryNextModel =
+        i < candidateModels.length - 1 &&
+        !params.abortSignal?.aborted &&
+        (classified.category === 'service_unavailable' ||
+          classified.category === 'model_unavailable');
+      if (canTryNextModel) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError ?? new Error('Service temporarily unavailable (503).');
 };
 
 export interface ClassifiedApiError {
@@ -170,14 +195,17 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
 
   const is503 =
     rawStatus === 503 ||
-    /\b(?:503|UNAVAILABLE|overloaded|temporarily unavailable)\b/i.test(msg);
+    /\b(?:503|UNAVAILABLE|overloaded|temporarily unavailable|high demand)\b/i.test(
+      msg
+    );
   if (is503) {
     return {
       httpStatus: 503,
       retryable: true,
       retryAfterMs,
       category: 'service_unavailable',
-      safeMessage: 'Service temporarily unavailable (503).',
+      safeMessage:
+        'Service temporarily unavailable (503): Google Gemini is experiencing high demand. Automatic retries with exponential backoff were exhausted — please click Retry to try again without reloading.',
     };
   }
 
@@ -220,6 +248,24 @@ export function classifyGeminiError(err: unknown): ClassifiedApiError {
     safeMessage:
       "Network error: could not reach Google's Gemini API. Check your connection and try again.",
   };
+}
+
+/**
+ * Computes exponential backoff delay (baseBackoffMs * 2^(attempt - 1)),
+ * honoring an explicit Retry-After header when present and capping at maxBackoffMs.
+ */
+export function computeExponentialBackoffMs(
+  attempt: number,
+  baseBackoffMs: number = BASE_BACKOFF_MS,
+  retryAfterMs: number | null = null,
+  maxBackoffMs: number = 10_000
+): number {
+  const safeAttempt = Math.max(1, Math.floor(attempt));
+  if (retryAfterMs !== null && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return Math.min(Math.round(retryAfterMs), maxBackoffMs);
+  }
+  const exponentialDelay = baseBackoffMs * Math.pow(2, safeAttempt - 1);
+  return Math.min(Math.round(exponentialDelay), maxBackoffMs);
 }
 
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
@@ -302,10 +348,12 @@ export async function callLlmWithTransportRetries(
         !options.abortSignal?.aborted
       ) {
         transportRetriesUsed += 1;
-        const waitMs =
-          classified.retryAfterMs !== null
-            ? Math.min(classified.retryAfterMs, 10_000)
-            : baseBackoff * Math.pow(2, transportRetriesUsed - 1);
+        const waitMs = computeExponentialBackoffMs(
+          transportRetriesUsed,
+          baseBackoff,
+          classified.retryAfterMs,
+          10_000
+        );
         await sleepWithAbort(waitMs, options.abortSignal);
         continue;
       }
@@ -318,13 +366,20 @@ export async function callLlmWithTransportRetries(
   }
 }
 
+export interface ConnectVerifyOptions {
+  baseBackoffMs?: number;
+  onStatusUpdate?: (state: ByokConnectionState) => void;
+}
+
 /**
  * Connects and verifies a visitor-typed Gemini API key by making ONE tiny structured-output
- * request using `buildGenerationConfig()` and `GEMINI_MODEL` in `/config.ts`.
+ * request using `buildGenerationConfig()` and `GEMINI_MODEL` in `/config.ts`,
+ * with exponential backoff retries on transient HTTP 429/503 errors.
  */
 export async function connectAndVerifyApiKey(
   candidateKey: string,
-  transport: LlmTransportFn = defaultGeminiTransport
+  transport: LlmTransportFn = defaultGeminiTransport,
+  options?: ConnectVerifyOptions
 ): Promise<ByokConnectionState> {
   const trimmed = (candidateKey ?? '').trim();
   if (trimmed.length === 0) {
@@ -334,40 +389,72 @@ export async function connectAndVerifyApiKey(
     );
   }
 
-  setConnectionStatus('connecting', 'Verifying API key and model configuration...');
+  const baseBackoff = options?.baseBackoffMs ?? BASE_BACKOFF_MS;
+  const initialConnecting = setConnectionStatus(
+    'connecting',
+    'Verifying your API key with Gemini...'
+  );
+  options?.onStatusUpdate?.(initialConnecting);
 
-  try {
-    const probeOutput = await transport({
-      apiKey: trimmed,
-      userContent: 'Respond with JSON {"ok": true}',
-      schemaOverride: CONNECT_PROBE_SCHEMA,
-    });
+  let attempt = 0;
+  while (true) {
+    try {
+      const probeOutput = await transport({
+        apiKey: trimmed,
+        userContent: 'Respond with JSON {"ok": true}',
+        schemaOverride: CONNECT_PROBE_SCHEMA,
+      });
 
-    const parsed = parseStrictJsonResponse(
-      probeOutput.rawText,
-      probeOutput.finishReason
-    );
-    if (!parsed.ok || parsed.data.ok !== true) {
-      return setConnectionStatus(
-        'config_rejected',
-        'Configuration rejected: buildGenerationConfig() in /config.ts did not return a valid {"ok": true} object.'
+      const parsed = parseStrictJsonResponse(
+        probeOutput.rawText,
+        probeOutput.finishReason
       );
-    }
+      if (!parsed.ok || parsed.data.ok !== true) {
+        return setConnectionStatus(
+          'config_rejected',
+          'Configuration rejected: buildGenerationConfig() in /config.ts did not return a valid {"ok": true} object.'
+        );
+      }
 
-    return setConnectedApiKey(trimmed);
-  } catch (err) {
-    const classified = classifyGeminiError(err);
-    switch (classified.category) {
-      case 'invalid_key':
-        return setConnectionStatus('invalid_key', classified.safeMessage);
-      case 'quota_exceeded':
-        return setConnectionStatus('quota_exceeded', classified.safeMessage);
-      case 'model_unavailable':
-        return setConnectionStatus('model_unavailable', classified.safeMessage);
-      case 'config_rejected':
-        return setConnectionStatus('config_rejected', classified.safeMessage);
-      default:
-        return setConnectionStatus('network_error', classified.safeMessage);
+      return setConnectedApiKey(trimmed);
+    } catch (err) {
+      const classified = classifyGeminiError(err);
+
+      if (classified.retryable && attempt < MAX_TRANSPORT_RETRIES) {
+        attempt += 1;
+        const waitMs = computeExponentialBackoffMs(
+          attempt,
+          baseBackoff,
+          classified.retryAfterMs,
+          8_000
+        );
+        const retryLabel =
+          classified.category === 'service_unavailable'
+            ? `Gemini service busy (503). Retrying with exponential backoff (attempt ${attempt} of ${MAX_TRANSPORT_RETRIES})...`
+            : `Rate limit reached (429). Retrying with exponential backoff (attempt ${attempt} of ${MAX_TRANSPORT_RETRIES})...`;
+        const retryState = setConnectionStatus('connecting', retryLabel);
+        options?.onStatusUpdate?.(retryState);
+        await sleepWithAbort(waitMs);
+        continue;
+      }
+
+      switch (classified.category) {
+        case 'invalid_key':
+          return setConnectionStatus('invalid_key', classified.safeMessage);
+        case 'quota_exceeded':
+          return setConnectionStatus('quota_exceeded', classified.safeMessage);
+        case 'service_unavailable':
+          return setConnectionStatus(
+            'service_unavailable',
+            classified.safeMessage
+          );
+        case 'model_unavailable':
+          return setConnectionStatus('model_unavailable', classified.safeMessage);
+        case 'config_rejected':
+          return setConnectionStatus('config_rejected', classified.safeMessage);
+        default:
+          return setConnectionStatus('network_error', classified.safeMessage);
+      }
     }
   }
 }

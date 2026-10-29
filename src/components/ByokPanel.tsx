@@ -10,8 +10,14 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
-import { disconnectApiKey } from '../engine/keyStore';
-import { connectAndVerifyApiKey } from '../engine/llmClient';
+import {
+  disconnectApiKey,
+  setConnectedApiKey,
+} from '../engine/keyStore';
+import {
+  connectAndVerifyApiKey,
+  defaultGeminiTransport,
+} from '../engine/llmClient';
 import type { ByokConnectionState } from '../types';
 
 interface ByokPanelProps {
@@ -35,13 +41,17 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
 
   const isConnecting = connectionState.status === 'connecting';
   const isConnected = connectionState.status === 'connected';
+  const isServiceUnavailable =
+    connectionState.status === 'service_unavailable' ||
+    (connectionState.status !== 'connected' &&
+      connectionState.status !== 'connecting' &&
+      /\b503\b|temporarily unavailable/i.test(connectionState.message));
   const hasErrorStatus =
     connectionState.status !== 'disconnected' &&
     connectionState.status !== 'connecting' &&
     connectionState.status !== 'connected';
 
-  const handleConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const runVerification = async () => {
     if (isConnecting) return;
 
     if (keyInput.trim().length === 0) {
@@ -51,12 +61,36 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
     }
 
     setLocalHint(null);
-    const next = await connectAndVerifyApiKey(keyInput);
+    const next = await connectAndVerifyApiKey(
+      keyInput,
+      defaultGeminiTransport,
+      {
+        onStatusUpdate: onStateChange,
+      }
+    );
     onStateChange(next);
     if (next.status === 'connected') {
       setKeyInput('');
       setIsChangingKey(false);
     }
+  };
+
+  const handleConnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await runVerification();
+  };
+
+  const handleContinueWithKeyAnyway = () => {
+    const trimmed = keyInput.trim();
+    if (!trimmed) {
+      inputRef.current?.focus();
+      return;
+    }
+    const next = setConnectedApiKey(trimmed);
+    setKeyInput('');
+    setLocalHint(null);
+    setIsChangingKey(false);
+    onStateChange(next);
   };
 
   const handleDisconnect = () => {
@@ -121,9 +155,11 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
     <section
       aria-label="Connect Gemini API Key"
       className={`rounded-xl border ${
-        hasErrorStatus
-          ? 'border-rose-800/80 bg-rose-950/20'
-          : 'border-slate-800 bg-slate-900/75'
+        isServiceUnavailable
+          ? 'border-amber-700/80 bg-amber-950/20'
+          : hasErrorStatus
+            ? 'border-rose-800/80 bg-rose-950/20'
+            : 'border-slate-800 bg-slate-900/75'
       } ${compact ? 'p-4' : 'p-5'} space-y-3.5`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -161,18 +197,72 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
       {(isConnecting || hasErrorStatus || localHint) && (
         <div
           role={hasErrorStatus ? 'alert' : 'status'}
-          className="text-xs flex items-center gap-2"
+          className="text-xs"
         >
           {isConnecting ? (
             <span className="inline-flex items-center gap-1.5 text-sky-300 font-medium">
               <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
-              <span>Verifying your API key with Gemini...</span>
+              <span>
+                {connectionState.message ||
+                  'Verifying your API key with Gemini...'}
+              </span>
             </span>
+          ) : isServiceUnavailable ? (
+            <div className="rounded-lg border border-amber-700/80 bg-amber-950/40 p-3.5 space-y-2.5">
+              <div className="flex items-start gap-2 text-amber-200 font-semibold">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div>Gemini Service Temporarily Unavailable (HTTP 503)</div>
+                  <p className="text-xs font-normal text-slate-200 leading-relaxed">
+                    {connectionState.message}
+                  </p>
+                  <p className="text-[11px] font-normal text-slate-300 leading-relaxed">
+                    Your key remains in the input field below — you can retry
+                    verification immediately or continue with this key without
+                    reloading the application.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  disabled={isConnecting || keyInput.trim().length === 0}
+                  onClick={() => void runVerification()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-400 text-slate-950 hover:bg-amber-300 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Retry Verification</span>
+                </button>
+                {keyInput.trim().length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isConnecting}
+                    onClick={handleContinueWithKeyAnyway}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-600/80 bg-amber-900/40 text-amber-100 hover:bg-amber-800/50 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
+                  >
+                    <span>Continue with Key Anyway</span>
+                  </button>
+                )}
+              </div>
+            </div>
           ) : hasErrorStatus ? (
-            <span className="inline-flex items-center gap-1.5 text-rose-300 font-medium">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{connectionState.message}</span>
-            </span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-rose-300 font-medium">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{connectionState.message}</span>
+              </span>
+              {keyInput.trim().length > 0 && (
+                <button
+                  type="button"
+                  disabled={isConnecting}
+                  onClick={() => void runVerification()}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-rose-700/80 bg-rose-900/40 text-rose-100 hover:bg-rose-800/50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Retry</span>
+                </button>
+              )}
+            </div>
           ) : (
             <span className="text-amber-300">{localHint}</span>
           )}
@@ -225,6 +315,11 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
             <>
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
               <span>Connecting...</span>
+            </>
+          ) : isServiceUnavailable ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Connection</span>
             </>
           ) : (
             <span>Connect API Key</span>

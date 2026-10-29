@@ -236,6 +236,7 @@ export type ByokStatus =
   | 'connected'
   | 'invalid_key'
   | 'quota_exceeded'
+  | 'service_unavailable'
   | 'model_unavailable'
   | 'config_rejected'
   | 'network_error';
