@@ -39,14 +39,14 @@ Client LLM Transport (`src/engine/llmClient.ts`) ─── POST /api/gemini/gene
 ├─► [3] Input & Schema Validation:
 │       • userContent <= 5,000 characters
 │       • systemInstruction <= 20,000 characters
-│       • schemaOverride whitelisted against VIMARSH_RESPONSE_SCHEMA only
+│       • schemaOverride objects rejected; authorized schemaId (vimarsh_response, connection_probe) validated by purpose
 ├─► [4] Credential Isolation:
 │       • BYOK Mode: Client key used exclusively; never falls back to server env key
-│       • Server-Managed Key: Allowed only in dev/preview; fails closed in production
+│       • Server-Managed Key: Disabled by default; authorized only with explicit opt-in
 ├─► [5] Single-Owner Retry & Deadline Policy:
 │       • Primary model: gemini-3.5-flash-lite
 │       • At most ONE fallback model: gemini-3.1-flash-lite (only on transient 503/404 if budget >= 10s)
-│       • Per-call timeout: 20s (PER_REQUEST_TIMEOUT_MS)
+│       • Per-call timeout: 25s (PER_REQUEST_TIMEOUT_MS = 25_000)
 │       • Server operation ceiling: 30s (SERVER_OPERATION_TIMEOUT_MS)
 │       • Client abort propagation: res.on('close') terminates upstream Gemini calls
 │
@@ -103,7 +103,7 @@ Vimarsh supports two distinct, isolated credential modes:
 - **Fallback Model**: `gemini-3.1-flash-lite` — Exactly one fallback model, attempted only for temporary service unavailability (HTTP 503) or model unavailability (HTTP 404), and only when at least 10 seconds of request deadline budget remains.
 
 ### Timeouts & Deadlines
-- **Connection Probe Timeout**: 15 seconds (`CONNECT_PROBE_TIMEOUT_MS = 15_000`).
+- **Connection Probe Timeout**: 25 seconds (`CONNECT_PROBE_TIMEOUT_MS = 25_000`).
 - **Per-Request Timeout**: 25 seconds (`PER_REQUEST_TIMEOUT_MS = 25_000`).
 - **Server Operation Ceiling**: 30 seconds (`SERVER_OPERATION_TIMEOUT_MS = 30_000`).
 - **Per-Question Overall Deadline**: 60 seconds (`PER_QUESTION_DEADLINE_MS = 60_000`) encompassing all JSON retries and SQL repairs.

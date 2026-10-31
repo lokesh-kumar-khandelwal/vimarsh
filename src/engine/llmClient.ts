@@ -21,6 +21,8 @@ import {
   GEMINI_MODEL,
   MAX_RETRY_AFTER_CAP_MS,
   PER_REQUEST_TIMEOUT_MS,
+  type RequestPurpose,
+  type SchemaId,
 } from '../config';
 import type { ByokConnectionState, ByokStatus, ProbeTelemetry } from '../types';
 import {
@@ -37,6 +39,8 @@ export interface RawLlmCallParams {
   apiKey: string;
   systemInstruction?: string;
   userContent: string;
+  purpose?: RequestPurpose;
+  schemaId?: SchemaId;
   schemaOverride?: Schema;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -125,6 +129,13 @@ export const defaultGeminiTransport: LlmTransportFn = async (
   // In the browser, call the Express server-side proxy (/api/gemini/generate)
   // so @google/genai runs server-side and never triggers PROXY_GENERATION_DISABLED.
   if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
+    const purpose: RequestPurpose =
+      params.purpose ??
+      (params.schemaOverride === CONNECT_PROBE_SCHEMA ? 'connection_probe' : 'query');
+    const schemaId: SchemaId =
+      params.schemaId ??
+      (params.schemaOverride === CONNECT_PROBE_SCHEMA ? 'connection_probe' : 'vimarsh_response');
+
     const response = await window.fetch('/api/gemini/generate', {
       method: 'POST',
       headers: {
@@ -134,7 +145,8 @@ export const defaultGeminiTransport: LlmTransportFn = async (
         apiKey: cleanKey,
         systemInstruction: params.systemInstruction,
         userContent: params.userContent,
-        schemaOverride: params.schemaOverride,
+        purpose,
+        schemaId,
       }),
       signal: params.abortSignal,
     });
@@ -144,17 +156,14 @@ export const defaultGeminiTransport: LlmTransportFn = async (
       rawText?: string;
       finishReason?: string | null;
       status?: number;
+      errorCategory?: ClassifiedApiError['category'];
       message?: string;
+      retryable?: boolean;
+      retryAfterSeconds?: number | null;
     } | null;
 
     try {
-      payload = (await response.json()) as {
-        ok?: boolean;
-        rawText?: string;
-        finishReason?: string | null;
-        status?: number;
-        message?: string;
-      };
+      payload = (await response.json()) as typeof payload;
     } catch {
       payload = null;
     }
@@ -167,11 +176,37 @@ export const defaultGeminiTransport: LlmTransportFn = async (
     }
 
     const errStatus = payload?.status ?? response.status ?? 500;
-    const errMsg =
-      payload?.message ??
-      `Gemini proxy request failed with HTTP ${response.status}.`;
-    const proxyErr = new Error(errMsg) as Error & { status?: number };
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const retryAfterSeconds =
+      payload?.retryAfterSeconds ??
+      (retryAfterHeader ? parseInt(retryAfterHeader, 10) : null);
+    const retryAfterMs =
+      retryAfterSeconds && Number.isFinite(retryAfterSeconds)
+        ? retryAfterSeconds * 1000
+        : null;
+
+    const category: ClassifiedApiError['category'] =
+      payload?.errorCategory ??
+      (errStatus === 429
+        ? 'rate_limit_exceeded'
+        : errStatus === 503
+          ? 'service_unavailable'
+          : errStatus === 401 || errStatus === 403
+            ? 'invalid_key'
+            : 'network_error');
+
+    const proxyErr = new Error(payload?.message ?? `Gemini proxy request failed with HTTP ${response.status}.`) as Error & {
+      status?: number;
+      classified?: ClassifiedApiError;
+    };
     proxyErr.status = errStatus;
+    proxyErr.classified = {
+      httpStatus: errStatus,
+      retryable: false, // Server owns upstream retries; browser never automatically replays proxy POST
+      retryAfterMs,
+      category,
+      safeMessage: payload?.message ?? `Gemini proxy request failed with HTTP ${response.status}.`,
+    };
     throw proxyErr;
   }
 
@@ -219,6 +254,9 @@ export const defaultGeminiTransport: LlmTransportFn = async (
           abortSignal: params.abortSignal,
         }
       );
+      if (params.purpose === 'connection_probe') {
+        delete (config as Record<string, unknown>).thinkingConfig;
+      }
       const response = await ai.models.generateContent({
         model: candidateModel,
         contents: params.userContent,
@@ -249,7 +287,9 @@ export interface ClassifiedApiError {
   retryAfterMs: number | null;
   category:
     | 'invalid_key'
+    | 'byok_required'
     | 'quota_exceeded'
+    | 'rate_limit_exceeded'
     | 'model_unavailable'
     | 'config_rejected'
     | 'service_unavailable'
@@ -337,6 +377,16 @@ async function runTransportWithAbortAndTimeout(
  * Never marks timeout, abort, invalid_key, model_unavailable, config_rejected, or permanent quota exhaustion as retryable.
  */
 export function classifyGeminiError(err: unknown): ClassifiedApiError {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'classified' in err &&
+    typeof (err as any).classified === 'object' &&
+    (err as any).classified !== null
+  ) {
+    return (err as { classified: ClassifiedApiError }).classified;
+  }
+
   if (err instanceof Error && err.name === 'TimeoutError') {
     return {
       httpStatus: null,
@@ -806,6 +856,8 @@ export async function connectAndVerifyApiKey(
               systemInstruction:
                 'Return only the exact JSON object {"ok": true}.',
               userContent: 'Respond with JSON {"ok": true}',
+              purpose: 'connection_probe',
+              schemaId: 'connection_probe',
               schemaOverride: CONNECT_PROBE_SCHEMA,
             },
             remainingMs,

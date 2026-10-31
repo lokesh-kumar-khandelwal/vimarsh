@@ -21,12 +21,12 @@ export const FALLBACK_GEMINI_MODELS = ['gemini-3.1-flash-lite'] as const;
 
 /**
  * Explicit timing policy:
- * - Connection-probe timeout: 15 seconds maximum.
- * - Individual model request timeout: 20 seconds maximum.
+ * - Connection-probe timeout: 25 seconds maximum (aligned with per-request timeout).
+ * - Individual model request timeout: 25 seconds maximum.
  * - Entire server-side generation operation (including allowed fallback): 30 seconds maximum.
  * - Entire question pipeline deadline: 60 seconds maximum (including JSON retries and SQL repairs).
  */
-export const CONNECT_PROBE_TIMEOUT_MS = 15_000;
+export const CONNECT_PROBE_TIMEOUT_MS = 25_000;
 export const PER_REQUEST_TIMEOUT_MS = 25_000;
 export const SERVER_OPERATION_TIMEOUT_MS = 30_000;
 export const PER_QUESTION_DEADLINE_MS = 60_000;
@@ -162,6 +162,26 @@ export function isAuthorizedSchemaOverride(schema: unknown): boolean {
   ];
   const hasAllKeys = requiredKeys.every((k) => k in props);
   return hasAllKeys;
+}
+
+export type SchemaId = 'vimarsh_response' | 'connection_probe';
+export type RequestPurpose = 'query' | 'connection_probe';
+
+/**
+ * Resolves trusted canonical server schemas based on declared request purpose and schemaId.
+ * Rejects unknown IDs, mismatched purposes, and never evaluates untrusted client JSON schema objects.
+ */
+export function resolveAuthorizedSchema(
+  schemaId: unknown,
+  purpose: unknown
+): Schema | null {
+  if (purpose === 'query' && (schemaId === 'vimarsh_response' || schemaId === undefined)) {
+    return VIMARSH_RESPONSE_SCHEMA;
+  }
+  if (purpose === 'connection_probe' && (schemaId === 'connection_probe' || schemaId === undefined)) {
+    return CONNECT_PROBE_SCHEMA;
+  }
+  return null;
 }
 
 export interface GenerationConfigOptions {

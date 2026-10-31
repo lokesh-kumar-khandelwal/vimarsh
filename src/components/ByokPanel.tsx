@@ -12,6 +12,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { disconnectApiKey } from '../engine/keyStore';
+import { CONNECT_PROBE_TIMEOUT_MS } from '../config';
 import {
   cancelActiveConnectProbe,
   connectAndVerifyApiKey,
@@ -210,7 +211,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
                 <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
                 <span>
                   {connectionState.message ||
-                    'Verifying your API key with Gemini (15s timeout)...'}
+                    `Verifying your API key with Gemini (${Math.round(CONNECT_PROBE_TIMEOUT_MS / 1000)}s timeout)...`}
                 </span>
               </span>
               <button

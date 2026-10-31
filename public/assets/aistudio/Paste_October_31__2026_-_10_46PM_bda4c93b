@@ -1,0 +1,676 @@
+# VIMARSH v6.3 — FINAL ENGINEERING HARDENING AND PRODUCTION-READINESS PREPARATION
+
+## ROLE
+
+Act as a principal software engineer, application security architect, backend engineer and performance specialist with 20+ years of software engineering experience.
+
+You are responsible for the final reliability, security and maintainability review of an existing application named:
+
+**Vimarsh: Text-to-SQL Clarification Engine**
+
+Work with the actual existing codebase. Think like an engineer maintaining a real software product, not an AI code generator building a new application.
+
+Your responsibility is to:
+- Identify genuine remaining engineering risks.
+- Correct security-policy inconsistencies.
+- Remove unnecessary retry behavior.
+- Improve resource management.
+- Make configuration predictable across environments.
+- Strengthen automated regression coverage.
+- Preserve the existing application and its core functionality.
+
+This is a focused final hardening pass.
+
+DO NOT rebuild the application.
+DO NOT redesign the UI.
+DO NOT introduce PostgreSQL or file-upload functionality.
+DO NOT replace working modules simply to make the architecture look different.
+DO NOT change established business definitions or the system prompt.
+
+The result must be understandable and maintainable by a fourth-year computer science student.
+
+---
+
+# PART 1: MANDATORY AUDIT OF THE CURRENT REPOSITORY
+
+Before editing, inspect the latest working tree and compare it with the current GitHub main branch.
+
+Inspect these files:
+
+- `server.ts`
+- `src/config.ts`
+- `src/engine/llmClient.ts`
+- `src/engine/queryPipeline.ts`
+- `src/engine/keyStore.ts`
+- `src/engine/promptBuilder.ts`
+- `src/engine/responseValidator.ts`
+- `src/engine/sqlValidator.ts`
+- `src/engine/dbClient.ts`
+- `src/engine/dbWorker.ts`
+- `src/components/ByokPanel.tsx`
+- `package.json`
+- `package-lock.json`
+- `eslint.config.js`
+- `.env.example`
+- `README.md`
+- Existing server, engine and fault-scenario tests.
+
+Specifically inspect the following current implementation details.
+
+1. `allowManagedKey` currently evaluates to true whenever `NODE_ENV` is not production, or when `ALLOW_SERVER_MANAGED_KEY=true`.
+2. `getClientIp()` manually reads the first `X-Forwarded-For` value.
+3. Rate-limit history is stored in an in-memory map. Old IP entries are not globally cleaned up.
+4. `isAuthorizedSchemaOverride()` verifies required property presence rather than exact canonical schema identity.
+5. `server.ts` owns upstream model fallback logic.
+6. `src/engine/llmClient.ts` also has transport retries, including retries of browser requests sent to `/api/gemini/generate`.
+7. The browser proxy transport does not currently preserve the full error category and Retry-After information from the server response.
+8. The model timeout comment in `src/config.ts` says 20 seconds, while `PER_REQUEST_TIMEOUT_MS` is 25,000.
+9. `package.json` has a preview command using `NODE_ENV=production tsx server.ts`, which is not cross-platform on Windows.
+10. The existing server tests and package setup must remain operational.
+
+Confirm these conditions against the actual source before editing. If a condition has already been fixed in the working tree, do not reintroduce it.
+
+Write a short internal remediation plan and proceed with implementation.
+
+Do not stop after describing the plan.
+
+---
+
+# PART 2: STRICT SERVER-MANAGED API-KEY SECURITY
+
+This is the highest-priority section.
+
+## 2.1 Define two explicit credential modes
+
+### Mode A: BYOK (Bring Your Own Key)
+
+This is the default and supported user-facing mode.
+
+Requirements:
+
+- The user supplies their own Gemini API key through the existing connection panel.
+- The server uses exactly that key for the request.
+- No fallback to `GEMINI_API_KEY` or `API_KEY` is allowed if the supplied user key fails.
+- No alternative credential may be silently substituted.
+- The key must never appear in logs, error messages, response payloads, browser URLs or GitHub source code.
+- Preserve existing API-key sanitization.
+- Do not change the current key-storage security behavior.
+
+### Mode B: Server-managed key
+
+This mode requires much stricter protection.
+
+The current condition:
+
+`ALLOW_SERVER_MANAGED_KEY === 'true' || !isProduction`
+
+is not sufficient for an application that may be exposed through a public preview URL.
+
+Requirements:
+
+1. Server-managed mode must be disabled by default in every environment.
+2. Being in development mode must not automatically mean that an endpoint is private.
+3. An environment flag alone must not authorize public use of a shared Gemini key.
+4. Production server-managed mode must require a genuine trusted authentication mechanism or authenticated hosting-platform identity.
+5. Do not trust a client-provided Boolean, request header or frontend-only shared token as proof of authentication.
+6. Do not create a static authentication secret that is bundled into browser code.
+7. If the AI Studio preview provides a trusted authentication mechanism, inspect how it works and use it only if the server can actually verify it.
+8. If such authentication cannot be verified, server-managed mode must remain disabled and Vimarsh must require BYOK.
+9. Do not break BYOK functionality while disabling unsupported server-managed behavior.
+
+Keep the existing server-managed key mechanism only where it can be protected properly.
+
+## 2.2 Status endpoint
+
+Review `/api/gemini/status`.
+
+It must:
+- Never return the API key.
+- Never return its last four characters.
+- Never return a key hash or other recoverable credential fragment.
+- Avoid disclosing more configuration information than necessary.
+- Report BYOK requirements accurately.
+- Never claim that a user-supplied key has been verified when a different credential was used.
+
+Add regression tests to prove that a server key cannot be retrieved through the status endpoint or any generation response.
+
+## 2.3 Credential test cases
+
+Test:
+
+- Valid BYOK key uses BYOK only.
+- Invalid BYOK key does not fall back to the server key.
+- Missing BYOK key requires an authorized server-managed mode.
+- Server-managed mode is disabled by default.
+- Setting `NODE_ENV=development` alone does not imply private access.
+- Production server-managed mode fails closed without trusted authentication.
+- An environment key never appears in response bodies or logs.
+- The status endpoint exposes no key fragment.
+
+---
+
+# PART 3: TRUSTED PROXY AND CLIENT IP HANDLING
+
+The current `getClientIp()` implementation reads the first `X-Forwarded-For` address directly.
+
+This can be spoofed by a client when the header is not supplied by a trusted proxy.
+
+Implement correct Express proxy handling.
+
+Requirements:
+
+1. Keep Express `trust proxy` disabled by default.
+2. If the deployment requires a reverse proxy, configure trust explicitly using a known proxy-hop count or trusted proxy ranges.
+3. Do not use `trust proxy = true` globally without a documented and verified deployment topology.
+4. Do not manually trust an arbitrary `X-Forwarded-For` value.
+5. Use Express's correctly derived `req.ip` after trusted proxy configuration.
+6. Validate the configured trust-proxy settings.
+7. Document the exact environment variable and expected format if proxy configuration is required.
+8. When no trusted proxy is configured, ignore client-supplied forwarding headers.
+
+## 3.1 Rate-limit memory management
+
+The current rate limiter uses an in-memory map containing IP addresses and request timestamps.
+
+Preserve the existing limits:
+
+- 30 requests per minute per effective client IP.
+- Maximum 5 concurrent Gemini requests.
+
+However:
+
+- Remove expired timestamps.
+- Periodically or opportunistically remove completely stale IP entries.
+- Prevent unlimited growth of the map when many distinct IP addresses are supplied.
+- Do not introduce an unnecessary permanently running timer.
+- Ensure concurrent request counts are decremented on every exit path.
+- Ensure cancellation does not leave a request slot occupied.
+- Ensure tests can reliably reset rate-limit and concurrency state.
+
+Do not describe an in-memory limiter as distributed production-grade protection.
+
+Document that the in-memory limiter is process-local. If Vimarsh is deployed across multiple server instances, a shared rate-limit store would be required for globally enforced limits. Do not add Redis in this task.
+
+## 3.2 Required tests
+
+- Spoofed `X-Forwarded-For` must not bypass rate limiting when proxy trust is disabled.
+- A configured trusted proxy must produce the correct client IP.
+- Invalid proxy configuration must fail safely.
+- Expired IP entries must be removed.
+- Map size must remain bounded.
+- The 30-request limit must still work.
+- The five-concurrent-request limit must still work.
+- Every request releases its concurrency slot after success, failure, timeout and cancellation.
+
+---
+
+# PART 4: REPLACE CLIENT-SUPPLIED SCHEMA OBJECTS WITH TRUSTED SCHEMA IDENTIFIERS
+
+The current `isAuthorizedSchemaOverride()` implementation is incomplete.
+
+It checks for required property names but does not fully verify the types, enums, nested properties, required fields or all other schema constraints.
+
+Do not attempt to secure arbitrary incoming JSON schemas by adding more shallow checks.
+
+Implement a simpler and more maintainable design.
+
+## 4.1 Schema identifier contract
+
+At the browser-to-server boundary, replace the arbitrary `schemaOverride` JSON object with a small supported identifier:
+
+- `vimarsh_response`
+- `connection_probe`
+
+The server must import the trusted canonical constants:
+
+- `VIMARSH_RESPONSE_SCHEMA`
+- `CONNECT_PROBE_SCHEMA`
+
+Resolve the identifier to the corresponding server-owned schema object.
+
+The server must never send an arbitrary client-provided schema directly to Gemini.
+
+## 4.2 Purpose validation
+
+Ensure:
+
+- Normal query requests can use only `vimarsh_response`.
+- Connection verification can use only `connection_probe`.
+- Unknown schema IDs are rejected.
+- Missing or invalid request purposes are rejected.
+- The connection probe continues using the existing strict JSON contract.
+- The normal query pipeline continues using the existing ten-key response contract.
+
+If needed, update the internal transport request type in `llmClient.ts` to use the trusted schema identifier.
+
+Keep any internal application use of canonical schema constants where necessary. The restriction applies to untrusted external request data.
+
+Do not duplicate the canonical schemas in multiple files.
+
+## 4.3 Regression tests
+
+Test rejection of:
+
+- An arbitrary schema object.
+- An unknown schema ID.
+- A connection-probe ID submitted for an ordinary query.
+- A query schema ID submitted for the connection-probe operation.
+- A modified probe schema with the wrong property type.
+- A schema with extra keys.
+- A schema with missing required fields.
+- A schema with altered enums or nested definitions.
+
+Also verify that both legitimate canonical operations still work.
+
+---
+
+# PART 5: ESTABLISH ONE CLEAR RETRY OWNER
+
+The current architecture has a browser client that can retry the proxy request and a server that has its own Gemini model fallback behavior.
+
+That means one user action can cause the complete proxy request to be repeated.
+
+This is undesirable because:
+
+- It can add considerable latency.
+- It can consume additional Gemini quota.
+- A network failure may occur after the original request has already reached Gemini.
+- Replaying the same generation request can duplicate billable work.
+
+Establish one explicit retry policy.
+
+## 5.1 Server owns upstream Gemini behavior
+
+The Express server is the sole owner of upstream model fallback and retry decisions for browser requests.
+
+Preserve:
+
+- One configured primary model.
+- At most one configured fallback model.
+- The existing supported model configuration unless genuine compatibility problems are demonstrated.
+- The existing 30-second overall server operation deadline.
+- The existing per-model timeout and cancellation mechanisms.
+
+Permit the single fallback only for explicitly documented recoverable conditions, such as:
+- HTTP 503 temporary model/service unavailability.
+- HTTP 404 model unavailability, when the fallback model is verified and the request still has sufficient deadline budget.
+
+Do not fall back for:
+- Invalid key.
+- Permission denied.
+- Malformed request.
+- Schema configuration rejection.
+- Daily/project quota exhaustion.
+- User cancellation.
+- Expired request deadline.
+
+Do not introduce a recursive fallback or retry loop.
+
+Do not try another credential when a request fails.
+
+## 5.2 Browser client must not replay generation POST requests automatically
+
+For the browser-to-Express path:
+
+- Make one proxy POST per user submission.
+- Do not automatically replay that POST after HTTP 429, 503 or 5xx.
+- Do not automatically replay an ambiguous `TypeError: Failed to fetch` because the server may already have processed the original request.
+- Do not retry merely because the client failed to receive the response.
+- Provide a clear error and let the user intentionally retry.
+
+If automatic POST replay is retained for any justified situation, implement a real server-side idempotency mechanism and test that duplicate requests cannot trigger duplicate Gemini generation. Prefer not to introduce this additional complexity for the current project.
+
+## 5.3 Preserve Retry-After information
+
+The server should return a safe structured error contract containing:
+
+- HTTP status.
+- Error category.
+- Human-readable safe message.
+- Retryable Boolean.
+- Optional retry-after seconds.
+- Request correlation ID.
+
+The browser transport must preserve those fields and the HTTP `Retry-After` header.
+
+Do not convert every HTTP 429 into the same generic Gemini quota error.
+
+Distinguish:
+
+1. `rate_limit_exceeded`: Vimarsh's own server limiter.
+2. `upstream_rate_limited`: Google's temporary request-rate limit, if distinguishable.
+3. `quota_exceeded`: Exhausted daily/project/API quota.
+4. `service_unavailable`: Gemini temporary service problem.
+5. `invalid_key`: Key or permission failure.
+6. `config_rejected`: Invalid model or generation configuration.
+7. `timeout`: Request deadline exceeded.
+8. `aborted`: User or client cancellation.
+9. `network_error`: Genuine transport/network failure.
+
+Client-side automatic retry must be disabled for proxy HTTP responses because the server owns upstream attempts.
+
+The UI may display a Retry action. Clicking that action should create one new user-initiated operation.
+
+## 5.4 Node/test transport behavior
+
+Inspect the separate Node.js direct-SDK transport path in `llmClient.ts`.
+
+Ensure it does not have an independent, uncontrolled model fallback loop.
+
+Clearly document the distinction between the browser proxy path and the Node test/direct transport path.
+
+Keep tests deterministic and avoid unnecessary changes to the production browser request flow.
+
+---
+
+# PART 6: TIMING CONFIGURATION AND CANCELLATION CONSISTENCY
+
+The current `src/config.ts` describes a 20-second model timeout, but `PER_REQUEST_TIMEOUT_MS` is 25,000.
+
+Resolve this mismatch.
+
+Use one authoritative timing configuration and make every comment, test and README statement match it.
+
+Preserve a defensible timing policy, initially:
+
+- Connection probe: maximum 15 seconds.
+- Individual Gemini request: maximum 25 seconds.
+- Complete server-side generation operation: maximum 30 seconds.
+- Complete question pipeline: maximum 60 seconds.
+
+Do not change these values unless the implementation or actual runtime measurements justify a carefully documented adjustment.
+
+Verify:
+
+1. The per-model timer actually aborts the SDK request.
+2. The server deadline aborts the active model request.
+3. Browser cancellation reaches the Express request.
+4. The Express request cancellation reaches the upstream SDK request.
+5. Timers and event listeners are cleaned up.
+6. The concurrency count is always released.
+7. No fallback starts after cancellation.
+8. No request waits indefinitely after its deadline.
+9. A normal successful response is not incorrectly treated as client cancellation.
+
+Do not use a longer timeout to hide poor performance.
+
+Do not reintroduce `httpOptions.timeout` unless its exact SDK behavior is verified and it cannot cause the previous X-Server-Timeout header problem.
+
+---
+
+# PART 7: WINDOWS-COMPATIBLE DEVELOPMENT AND PREVIEW COMMANDS
+
+The project's developer uses Windows 11 as well as Google AI Studio.
+
+The current script:
+
+`NODE_ENV=production tsx server.ts`
+
+uses POSIX shell assignment syntax and may fail in PowerShell or Windows Command Prompt.
+
+Fix the production preview command using a cross-platform approach.
+
+Acceptable approaches:
+
+- A compatible `cross-env` dependency, if genuinely needed and compatible with the current environment.
+- A small Node/TypeScript startup helper that sets the environment before dynamically importing the server.
+
+Do not unnecessarily replace the existing development startup architecture.
+
+Verify:
+
+- `npm run dev`
+- `npm run preview`
+- `npm run start`
+
+Ensure the production preview starts the Express server that serves the frontend and handles `/api/gemini/*` routes. Do not use a Vite-only preview server that silently omits the backend routes.
+
+---
+
+# PART 8: DOCUMENTATION AND REPOSITORY CONSISTENCY
+
+Update documentation only where necessary to match the final verified behavior.
+
+Inspect:
+
+- README.md
+- .env.example
+- package.json
+- package-lock.json
+
+Document accurately:
+
+- BYOK as the default supported credential mode.
+- The conditions under which server-managed keys are allowed.
+- Trusted proxy configuration.
+- The limits and limitations of in-memory rate limiting.
+- Primary model and fallback selection.
+- Retry ownership.
+- Request deadlines.
+- Safe error categories.
+- Local development commands.
+- Production preview/startup commands.
+- Environment variables and their purpose.
+
+Preserve npm as the authoritative package manager.
+
+Do not add Bun back or create another lockfile.
+
+Do not change unrelated dependencies or upgrade core packages without a demonstrated reason.
+
+Preserve the genuine ESLint command, the existing typecheck, test and build scripts.
+
+Do not silently disable lint rules or weaken existing TypeScript settings.
+
+---
+
+# PART 9: PRESERVE CORE VIMARSH FUNCTIONALITY
+
+This is a security and reliability repair, not a functional redesign.
+
+Do not modify or weaken:
+
+- The React Ask Data interface.
+- Developer Tools navigation.
+- The five-table SQLite schema.
+- Database seed data and relationships.
+- The seven system-prompt placeholders.
+- `PROMPT_VERSION = "vimarsh-prompt-v6.0"`.
+- The complete ten-key structured JSON contract.
+- `SUCCESS`, `CLARIFY`, `REJECT` outcomes.
+- The clarification-round limit.
+- Input guard behavior.
+- Conversation-history serialization and escaping.
+- Business glossary definitions.
+- Revenue and date calculation rules.
+- Sensitive-column restrictions.
+- SQL AST parser behavior.
+- SQL function allowlist.
+- Fail-closed SQL validation.
+- `ValidatedSql` execution boundary.
+- EXPLAIN QUERY PLAN validation.
+- 1,000-row execution limit.
+- Five-second SQLite Worker execution timeout.
+- SQL repair limits and full validation after repair.
+- Existing evaluation and golden test functionality.
+- Existing fault-scenario tests.
+- Existing database reset confirmation.
+
+Do not introduce PostgreSQL, external database upload, user accounts, or unrelated new features.
+
+Do not remove a failing security rule merely to make tests pass.
+
+---
+
+# PART 10: TESTING AND REGRESSION REQUIREMENTS
+
+Inspect all current tests before editing them.
+
+Do not delete, skip, weaken or rewrite existing tests simply to produce a passing result.
+
+Add or update focused tests for:
+
+### Credential security
+- BYOK strict isolation.
+- No credential fallback after BYOK failure.
+- Server-managed key disabled by default.
+- Production fail-closed behavior.
+- Status response contains no credential fragment.
+- Secrets never appear in logs or API responses.
+
+### Proxy and rate limiting
+- Untrusted forwarding header cannot spoof client IP.
+- Correct behavior with configured trusted proxy.
+- Invalid proxy configuration.
+- Expired IP-map entries are cleaned.
+- Memory usage remains bounded.
+- 30 requests per minute per client IP.
+- Five concurrent requests maximum.
+- Every request releases concurrency state.
+
+### Schema authorization
+- Only known schema identifiers accepted.
+- Correct purpose-to-schema mapping.
+- All arbitrary JSON schemas rejected.
+- Probe and Vimarsh canonical schemas both function.
+
+### Retry policy
+- Browser proxy request is sent once per user submission.
+- HTTP 429 from the server does not trigger an automatic repeat.
+- HTTP 503 is not automatically replayed by the browser.
+- Network failure is not automatically replayed without idempotency protection.
+- Invalid keys never trigger fallback.
+- Quota exhaustion never triggers fallback.
+- One server-side fallback is enforced.
+- No new attempts after cancellation or timeout.
+- Retry-After survives from server response to UI error handling.
+
+### Timing and lifecycle
+- Connection-probe deadline.
+- Individual model deadline.
+- Overall server deadline.
+- Overall question deadline.
+- Upstream cancellation propagation.
+- Timer and listener cleanup.
+- Concurrency counter cleanup after errors.
+
+### Existing regression suite
+Preserve all existing:
+- Stage 1 tests.
+- SQL validator cases.
+- Worker executor tests.
+- Stage 3 pipeline tests.
+- Stage 4 golden evaluation tests.
+- Stage 5 fault scenarios.
+- Date-helper tests.
+- Prompt-builder contract tests.
+- Existing server tests.
+
+Use mocked transports, fake timers and deterministic test fixtures where appropriate.
+
+Mocked tests are evidence of deterministic application behavior. They are not proof of live Gemini latency or production security.
+
+---
+
+# PART 11: FINAL VERIFICATION
+
+Run the commands independently:
+
+1. `npm ci`
+2. `npm test`
+3. `npm run typecheck`
+4. `npm run lint`
+5. `npm run build`
+
+Also verify:
+
+- Server imports successfully in Vitest without unexpectedly opening a network listener.
+- Development server starts.
+- Production preview starts on Windows-compatible syntax.
+- `/api/gemini/status` is reachable.
+- `/api/gemini/generate` returns the documented structured response.
+- Invalid requests fail before contacting Gemini.
+- Request cancellation releases resources.
+- The frontend handles all server error categories.
+- Existing database and UI functionality remains intact.
+
+If a valid Gemini key is available in the preview environment, perform a small number of actual connection and query tests.
+
+Record:
+
+- Model used.
+- Credential mode.
+- Connection duration.
+- Individual Gemini request duration.
+- Total question duration.
+- Number of upstream attempts.
+- Any error category.
+
+Never display or include the actual API key in the final report.
+
+Do not claim that mocked tests prove live integration.
+Do not claim a latency improvement without actual comparative timing measurements.
+
+---
+
+# PART 12: FINAL ENGINEERING REPORT
+
+When implementation and verification are complete, provide:
+
+1. Summary of the final changes.
+2. Exact files modified and why.
+3. Final credential-selection policy.
+4. Final trusted-proxy and rate-limiter behavior.
+5. Final schema-ID contract.
+6. Final retry-ownership rules.
+7. Final model and timeout configuration.
+8. Windows development/preview command behavior.
+9. Actual dependency and lockfile state.
+10. Results of npm ci, tests, typecheck, lint and build.
+11. Actual server smoke-test results.
+12. Actual Gemini connection/query measurements, if performed.
+13. Remaining limitations and unresolved risks.
+
+Use these three evidence categories in the report:
+
+- **Code verified:** Confirmed by inspecting the actual implementation.
+- **Automated test verified:** Confirmed by an executed test.
+- **Live runtime verified:** Confirmed by running the application and observing actual behavior.
+
+Never mix these categories.
+
+If an acceptance criterion cannot be completed, identify it explicitly and explain why.
+
+## FINAL ACCEPTANCE CRITERIA
+
+This task is complete only when:
+
+- BYOK cannot silently fall back to a shared server key.
+- Public server-managed key use is disabled without verified authentication.
+- Client IP rate limiting cannot be bypassed by arbitrary forwarding headers.
+- Rate-limit state remains bounded.
+- The API accepts only server-owned canonical response schemas.
+- The browser does not automatically replay proxy generation requests.
+- Upstream retry/fallback behavior is bounded and has one clear owner.
+- Retry-After and structured error categories are preserved.
+- Timeouts, cancellation and resource cleanup are consistent.
+- Windows preview commands work.
+- Documentation matches actual runtime behavior.
+- All existing SQL safety and clarification rules remain intact.
+- Automated verification results are genuine and reproducible.
+
+## FINAL DIRECTIVE
+
+Perform this as a controlled final hardening change to the existing Vimarsh repository.
+
+Prefer simple, explicit policies over clever retry systems or unnecessary abstractions.
+
+Do not modify unrelated files.
+Do not recreate existing components.
+Do not redesign the frontend.
+Do not add new product features.
+Do not claim production readiness merely because the build succeeds.
+
+Inspect, implement, test, document and report.
+
+**Stop when the acceptance criteria are satisfied.**
