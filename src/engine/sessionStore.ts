@@ -13,7 +13,6 @@
 
 import type {
   AssistantConversationTurn,
-  ConversationTurn,
   PendingClarificationState,
   SessionState,
   UserConversationTurn,

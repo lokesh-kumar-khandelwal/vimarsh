@@ -37,8 +37,10 @@
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
     "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "^7.0.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
     "vitest": "5.0.5"
   }
 }

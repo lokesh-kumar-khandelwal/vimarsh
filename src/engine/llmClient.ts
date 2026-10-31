@@ -145,7 +145,7 @@ export const defaultGeminiTransport: LlmTransportFn = async (
       finishReason?: string | null;
       status?: number;
       message?: string;
-    } | null = null;
+    } | null;
 
     try {
       payload = (await response.json()) as {

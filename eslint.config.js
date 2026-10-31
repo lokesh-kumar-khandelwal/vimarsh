@@ -1,44 +1,37 @@
 import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
 
-export default [
-  js.configs.recommended,
+export default tseslint.config(
   {
-    languageOptions: {
-      ecmaVersion: 2022,
-      sourceType: 'module',
-      globals: {
-        window: 'readonly',
-        document: 'readonly',
-        console: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        setInterval: 'readonly',
-        clearInterval: 'readonly',
-        process: 'readonly',
-        performance: 'readonly',
-        fetch: 'readonly',
-        Headers: 'readonly',
-        Response: 'readonly',
-        Request: 'readonly',
-        URL: 'readonly',
-        Blob: 'readonly',
-        Worker: 'readonly',
-        AbortController: 'readonly',
-        AbortSignal: 'readonly',
-        DOMException: 'readonly',
-        MessageEvent: 'readonly',
-        ErrorEvent: 'readonly',
-        Record: 'readonly',
-        __dirname: 'readonly',
-        __filename: 'readonly',
-      },
+    ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.d.ts'],
+  },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  {
+    files: ['**/*.{ts,tsx}'],
+    plugins: {
+      'react-hooks': reactHooks,
     },
     rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-      'no-undef': 'off', // TypeScript compiler handles type and symbol resolution
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+      'no-undef': 'off',
     },
   },
   {
-    ignores: ['dist/**', 'node_modules/**', 'bun.lock'],
-  },
-];
+    files: ['**/*.{js,mjs,cjs}'],
+    rules: {
+      'no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+      'no-undef': 'off',
+    },
+  }
+);

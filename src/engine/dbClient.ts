@@ -269,7 +269,7 @@ export class DbClient {
         } catch {
           // If re-init fails, state is already set to error
         }
-        throw new Error('Query timed out');
+        throw new Error('Query timed out', { cause: err });
       }
       throw err;
     }
@@ -298,7 +298,7 @@ export class DbClient {
         } catch {
           // If re-init fails, state is already set to error
         }
-        throw new Error('Query timed out');
+        throw new Error('Query timed out', { cause: err });
       }
       throw err;
     }

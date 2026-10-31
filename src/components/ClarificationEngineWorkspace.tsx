@@ -1249,12 +1249,21 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
     : 0;
 
   // Build cumulative waterfall offsets for each stage in latestTrace
-  let runningOffsetMs = 0;
-  const waterfallItems = latestTrace.map((st, index) => {
-    const startMs = runningOffsetMs;
+  const waterfallItems: Array<{
+    index: number;
+    stage: (typeof latestTrace)[0]['stage'];
+    status: (typeof latestTrace)[0]['status'];
+    detail: string;
+    startMs: number;
+    durationMs: number;
+    category: 'ai' | 'sql' | 'guard';
+  }> = [];
+  let cumulativeOffsetMs = 0;
+  for (let index = 0; index < latestTrace.length; index++) {
+    const st = latestTrace[index];
+    const startMs = cumulativeOffsetMs;
     const durationMs = Math.max(0, st.durationMs);
-    runningOffsetMs += durationMs;
-
+    cumulativeOffsetMs += durationMs;
     const category: 'ai' | 'sql' | 'guard' =
       st.stage === 'LLM_CALL' || st.stage === 'REPAIR_ATTEMPT'
         ? 'ai'
@@ -1263,8 +1272,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
             st.stage === 'WORKER_EXECUTE'
           ? 'sql'
           : 'guard';
-
-    return {
+    waterfallItems.push({
       index,
       stage: st.stage,
       status: st.status,
@@ -1272,9 +1280,9 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
       startMs,
       durationMs,
       category,
-    };
-  });
-  const waterfallTotalSpanMs = Math.max(1, runningOffsetMs, totalTurnMs);
+    });
+  }
+  const waterfallTotalSpanMs = Math.max(1, cumulativeOffsetMs, totalTurnMs);
 
   const maxSessionTurnLatencyMs = Math.max(
     1,

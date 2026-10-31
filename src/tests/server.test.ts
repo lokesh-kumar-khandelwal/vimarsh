@@ -585,7 +585,7 @@ describe('Vimarsh Server API & Security Test Suite', () => {
 
   // 15. Concurrency limit returns 503 with retry guidance
   it('15. Concurrency control: returns 503 with Retry-After when max concurrent requests is reached', async () => {
-    let releaseHolders: (() => void)[] = [];
+    const releaseHolders: (() => void)[] = [];
 
     const mockApp = createExpressApp({
       clientFactory: () => ({

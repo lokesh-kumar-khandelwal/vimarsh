@@ -34,7 +34,6 @@ import type {
   QueryExecutionResult,
   SchemaContext,
   TestCaseResult,
-  ValidatedSql,
   VimarshResponse,
   WorkerRequest,
   WorkerResponse,

@@ -292,8 +292,8 @@ async function obtainValidatedModelResponse(params: {
     });
 
     const llmStart = performance.now();
-    let rawText = '';
-    let finishReason: string | null = null;
+    let rawText: string;
+    let finishReason: string | null;
     const requestAbortScope = createPerRequestAbortScope(
       params.abortSignal,
       params.requestTimeoutMs ?? PER_REQUEST_TIMEOUT_MS,
