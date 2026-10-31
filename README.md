@@ -38,7 +38,7 @@ Client LLM Transport (`src/engine/llmClient.ts`) ─── POST /api/gemini/gene
 ├─► [2] Concurrency Control: Max 5 concurrent Gemini requests (returns 503 if busy)
 ├─► [3] Input & Schema Validation:
 │       • userContent <= 5,000 characters
-│       • systemInstruction <= 20,000 characters
+│       • systemInstruction <= 50,000 characters
 │       • schemaOverride objects rejected; authorized schemaId (vimarsh_response, connection_probe) validated by purpose
 ├─► [4] Credential Isolation:
 │       • BYOK Mode: Client key used exclusively; never falls back to server env key

@@ -15,7 +15,7 @@
  * 2. Status Endpoint Privacy:
  *    - /api/gemini/status never exposes API keys, key hashes, or last-4 characters.
  * 3. Strict Input & Schema Validation:
- *    - Validates userContent (non-empty, <= 5000 chars) and systemInstruction (<= 20000 chars).
+ *    - Validates userContent (non-empty, <= 5000 chars) and systemInstruction (<= 50000 chars).
  *    - Arbitrary client-supplied JSON schema objects are strictly rejected.
  *    - Requires authorized schemaId ('vimarsh_response' or 'connection_probe') matching the request purpose.
  * 4. Single-Owner Retry & Deadline Policy:
@@ -46,7 +46,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const MAX_USER_CONTENT_LENGTH = 5_000;
-export const MAX_SYSTEM_INSTRUCTION_LENGTH = 20_000;
+export const MAX_SYSTEM_INSTRUCTION_LENGTH = 50_000;
 export const MAX_CONCURRENT_REQUESTS = 5;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 export const RATE_LIMIT_MAX_REQUESTS = 30;
