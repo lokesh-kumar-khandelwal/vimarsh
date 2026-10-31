@@ -5,17 +5,30 @@ import {
   type Schema,
 } from '@google/genai';
 
-export const GEMINI_MODEL = 'gemini-3-flash-preview';
-export const FALLBACK_GEMINI_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-flash-lite-latest',
-  'gemini-flash-latest',
-] as const;
+/**
+ * Primary Model: gemini-3.5-flash-lite
+ * Official stable Google Gemini model recommended for low-latency text and structured output.
+ * Fully supports responseSchema and thinkingConfig (thinkingLevel: MINIMAL).
+ */
+export const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 
+/**
+ * Fallback Model: gemini-3.1-flash-lite
+ * Exactly ONE fallback model, invoked ONLY for temporary service unavailability (HTTP 503)
+ * or model unavailability (HTTP 404) when at least 10 seconds of request-deadline budget remains.
+ */
+export const FALLBACK_GEMINI_MODELS = ['gemini-3.1-flash-lite'] as const;
+
+/**
+ * Explicit timing policy:
+ * - Connection-probe timeout: 15 seconds maximum.
+ * - Individual model request timeout: 20 seconds maximum.
+ * - Entire server-side generation operation (including allowed fallback): 30 seconds maximum.
+ * - Entire question pipeline deadline: 60 seconds maximum (including JSON retries and SQL repairs).
+ */
 export const CONNECT_PROBE_TIMEOUT_MS = 15_000;
 export const PER_REQUEST_TIMEOUT_MS = 25_000;
+export const SERVER_OPERATION_TIMEOUT_MS = 30_000;
 export const PER_QUESTION_DEADLINE_MS = 60_000;
 export const MAX_RETRY_AFTER_CAP_MS = 8_000;
 
@@ -106,11 +119,54 @@ export const CONNECT_PROBE_SCHEMA: Schema = {
   required: ['ok'],
 };
 
+/**
+ * Validates whether an incoming schemaOverride is one of the known, authorized schemas.
+ * Permitted: CONNECT_PROBE_SCHEMA and VIMARSH_RESPONSE_SCHEMA.
+ */
+export function isAuthorizedSchemaOverride(schema: unknown): boolean {
+  if (!schema || typeof schema !== 'object') {
+    return false;
+  }
+  const s = schema as Record<string, unknown>;
+  if (s.type !== 'OBJECT' && s.type !== Type.OBJECT) {
+    return false;
+  }
+  const props = s.properties as Record<string, unknown> | undefined;
+  if (!props || typeof props !== 'object') {
+    return false;
+  }
+
+  // Probe schema check: exactly { ok: { type: BOOLEAN } }
+  const isProbe =
+    Object.keys(props).length === 1 &&
+    props.ok !== undefined &&
+    Array.isArray(s.required) &&
+    s.required.length === 1 &&
+    s.required[0] === 'ok';
+  if (isProbe) {
+    return true;
+  }
+
+  // Vimarsh response schema check: all 10 required keys
+  const requiredKeys = [
+    'status',
+    'reasoning',
+    'sql_query',
+    'follow_up_question',
+    'clarification_options',
+    'ambiguity_type',
+    'assumptions',
+    'tables_used',
+    'confidence',
+    'rejection_reason',
+  ];
+  const hasAllKeys = requiredKeys.every((k) => k in props);
+  return hasAllKeys;
+}
+
 export interface GenerationConfigOptions {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  omitThinkingConfig?: boolean;
-  omitResponseSchema?: boolean;
 }
 
 export function buildGenerationConfig(
@@ -121,16 +177,10 @@ export function buildGenerationConfig(
   const config: GenerateContentConfig = {
     temperature: 0.1,
     responseMimeType: 'application/json',
-    ...(options?.omitResponseSchema
-      ? {}
-      : { responseSchema: schemaOverride ?? VIMARSH_RESPONSE_SCHEMA }),
-    ...(options?.omitThinkingConfig
-      ? {}
-      : {
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MINIMAL,
-          },
-        }),
+    responseSchema: schemaOverride ?? VIMARSH_RESPONSE_SCHEMA,
+    thinkingConfig: {
+      thinkingLevel: ThinkingLevel.MINIMAL,
+    },
     httpOptions: {
       retryOptions: {
         attempts: 1,

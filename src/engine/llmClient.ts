@@ -92,33 +92,16 @@ function extractStatusAndMessage(err: unknown): {
   return { status, msg };
 }
 
-function isNonKey400Error(err: unknown): boolean {
-  const { status, msg } = extractStatusAndMessage(err);
-  if (isApiKeyAuthError(status, msg)) {
-    return false;
-  }
-  return (
-    status === 400 ||
-    /\b(?:400|INVALID_ARGUMENT|FAILED_PRECONDITION)\b/i.test(msg)
-  );
-}
-
 function shouldTryFallbackModel(err: unknown): boolean {
   const { status, msg } = extractStatusAndMessage(err);
   if (isApiKeyAuthError(status, msg)) {
     return false;
   }
+  // Permit fallback ONLY for temporary service unavailability (503) or model unavailability (404)
   return (
-    status === 400 ||
     status === 404 ||
-    status === 429 ||
-    status === 500 ||
-    status === 502 ||
     status === 503 ||
-    status === 504 ||
-    /\b(?:400|404|429|500|502|503|504|INVALID_ARGUMENT|UNAVAILABLE|DEADLINE_EXCEEDED|NOT_FOUND|RESOURCE_EXHAUSTED|high demand|overloaded|Deadline expired)\b/i.test(
-      msg
-    )
+    /\b(?:503|404|UNAVAILABLE|NOT_FOUND|model.*not found)\b/i.test(msg)
   );
 }
 
@@ -192,6 +175,7 @@ export const defaultGeminiTransport: LlmTransportFn = async (
     throw proxyErr;
   }
 
+  // Node.js execution (CLI / Vitest runner)
   const ai = new GoogleGenAI({
     apiKey: cleanKey,
     httpOptions: {
@@ -218,7 +202,7 @@ export const defaultGeminiTransport: LlmTransportFn = async (
     const finishReason =
       response.candidates && response.candidates.length > 0
         ? String(response.candidates[0]?.finishReason ?? 'STOP')
-        : null;
+        : 'STOP';
     return { rawText, finishReason };
   };
 
@@ -243,58 +227,6 @@ export const defaultGeminiTransport: LlmTransportFn = async (
       return extractResponseOutput(response);
     } catch (err) {
       lastErr = err;
-
-      // If this model rejected thinkingConfig or responseSchema with a non-key 400 error,
-      // immediately retry once on the same model without thinkingConfig (and then without responseSchema)
-      if (!params.abortSignal?.aborted && isNonKey400Error(err)) {
-        const { msg } = extractStatusAndMessage(err);
-        const isModelNotFound400 =
-          /\b(?:model.*not found|not supported for generateContent|unknown model)\b/i.test(
-            msg
-          );
-        if (!isModelNotFound400) {
-          try {
-            const fallbackConfigNoThinking = buildGenerationConfig(
-              params.systemInstruction,
-              params.schemaOverride,
-              {
-                abortSignal: params.abortSignal,
-                omitThinkingConfig: true,
-              }
-            );
-            const retryRes = await ai.models.generateContent({
-              model: candidateModel,
-              contents: params.userContent,
-              config: fallbackConfigNoThinking,
-            });
-            return extractResponseOutput(retryRes);
-          } catch (retryErr1) {
-            lastErr = retryErr1;
-            if (!params.abortSignal?.aborted && isNonKey400Error(retryErr1)) {
-              try {
-                const fallbackConfigJsonOnly = buildGenerationConfig(
-                  params.systemInstruction,
-                  params.schemaOverride,
-                  {
-                    abortSignal: params.abortSignal,
-                    omitThinkingConfig: true,
-                    omitResponseSchema: true,
-                  }
-                );
-                const retryRes2 = await ai.models.generateContent({
-                  model: candidateModel,
-                  contents: params.userContent,
-                  config: fallbackConfigJsonOnly,
-                });
-                return extractResponseOutput(retryRes2);
-              } catch (retryErr2) {
-                lastErr = retryErr2;
-              }
-            }
-          }
-        }
-      }
-
       if (
         i < modelsToTry.length - 1 &&
         !params.abortSignal?.aborted &&
