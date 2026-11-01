@@ -15,7 +15,7 @@ Instead of guessing when a natural-language question is ambiguous, Vimarsh enfor
 
 Vimarsh operates as a full-stack TypeScript application on **port 3000**:
 - **Backend (`server.ts`)**: Express server mounting Vite in development (`middlewareMode`) and serving static assets in production, exposing `/api/gemini/generate` and `/api/gemini/status`.
-- **Client (`src/`)**: Single-page application rendering the interactive Clarification Workspace, Schema Viewer, BYOK Connection Panel, Validator Playground, Golden Set Evaluation, and Performance Diagnostics.
+- **Client (`src/`)**: Single-page application rendering the interactive Clarification Workspace, Query History with direct re-run & CSV export, Schema Viewer, BYOK Connection Panel, Validator Playground, Golden Set Evaluation, and Performance Diagnostics.
 - **SQLite Engine (`src/engine/dbWorker.ts`)**: Pure WebAssembly SQLite running in a dedicated browser Web Worker, keeping data execution isolated and responsive.
 
 ### Request Lifecycle

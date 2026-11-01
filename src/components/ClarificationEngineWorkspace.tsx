@@ -12,6 +12,7 @@ import {
   Database,
   Download,
   HelpCircle,
+  History,
   Info,
   MessageSquarePlus,
   Play,
@@ -32,6 +33,11 @@ import { auditLog } from '../engine/auditLog';
 import type { DbClient } from '../engine/dbClient';
 import { runInputGuard } from '../engine/inputGuard';
 import { getLastProbeTelemetry } from '../engine/llmClient';
+import {
+  getQueryHistory,
+  recordQueryExecution,
+  subscribeQueryHistory,
+} from '../engine/queryHistory';
 import { runQuestionPipeline } from '../engine/queryPipeline';
 import {
   PENDING_INPUT_HINT,
@@ -50,6 +56,7 @@ import type {
   SqlCellValue,
 } from '../types';
 import { ByokPanel } from './ByokPanel';
+import { QueryHistoryPanel } from './QueryHistoryPanel';
 import { Sidebar } from './Sidebar';
 
 interface ClarificationEngineWorkspaceProps {
@@ -274,6 +281,10 @@ export const ClarificationEngineWorkspace: React.FC<
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [inputFeedback, setInputFeedback] = useState<string | null>(null);
   const [showDataReference, setShowDataReference] = useState<boolean>(false);
+  const [showQueryHistory, setShowQueryHistory] = useState<boolean>(false);
+  const [historyCount, setHistoryCount] = useState<number>(() =>
+    getQueryHistory().length
+  );
   const [expandedReasoning, setExpandedReasoning] = useState<
     Record<string, boolean>
   >({});
@@ -291,6 +302,51 @@ export const ClarificationEngineWorkspace: React.FC<
       unsubSession();
     };
   }, []);
+
+  useEffect(() => {
+    return subscribeQueryHistory((h) => setHistoryCount(h.length));
+  }, []);
+
+  // Seed history from any existing session turns if queryHistory is currently empty
+  useEffect(() => {
+    const existing = getQueryHistory();
+    if (existing.length === 0 && sessionState.turns.length > 0) {
+      for (let i = 0; i < sessionState.turns.length; i++) {
+        const turn = sessionState.turns[i];
+        if (
+          turn.role === 'assistant' &&
+          turn.response.status === 'SUCCESS' &&
+          turn.response.sql_query
+        ) {
+          const prevUser =
+            i > 0 && sessionState.turns[i - 1]?.role === 'user'
+              ? (sessionState.turns[i - 1] as { question: string })
+              : null;
+          recordQueryExecution({
+            question: prevUser?.question ?? 'Executed SQL query',
+            sql: turn.response.sql_query,
+            rowCount: turn.executionResult?.rowCount ?? 0,
+            executionTimeMs: turn.executionResult?.executionTimeMs ?? 0,
+            tablesUsed: turn.validatedTablesUsed ?? [],
+            status: 'SUCCESS',
+            timestamp: turn.timestamp,
+          });
+        }
+      }
+    }
+  }, [sessionState.turns]);
+
+  const handleLoadQuestionFromHistory = (question: string) => {
+    setQuestionInput(question);
+    setInputFeedback(null);
+    questionInputRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+    setTimeout(() => {
+      questionInputRef.current?.focus();
+    }, 50);
+  };
 
   const isConnected = connectionState.status === 'connected';
 
@@ -487,31 +543,46 @@ export const ClarificationEngineWorkspace: React.FC<
                 ? 'Your clarification response'
                 : 'Your question'}
             </label>
-            {turns.length > 0 && (
-              <div className="flex items-center gap-2">
-                {sessionState.pending && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowQueryHistory((prev) => !prev)}
+                aria-expanded={showQueryHistory}
+                className="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>
+                  {showQueryHistory
+                    ? 'Hide Query History'
+                    : `Query History (${historyCount})`}
+                </span>
+              </button>
+              {turns.length > 0 && (
+                <>
+                  {sessionState.pending && (
+                    <button
+                      type="button"
+                      onClick={() => sessionStore.startNewQuestion()}
+                      disabled={isSubmitting}
+                      className="text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                    >
+                      New question
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => sessionStore.startNewQuestion()}
+                    onClick={() => {
+                      sessionStore.clearAll();
+                      setInputFeedback(null);
+                    }}
                     disabled={isSubmitting}
-                    className="text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                    className="text-xs text-slate-400 hover:text-slate-200 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
                   >
-                    New question
+                    Clear conversation
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    sessionStore.clearAll();
-                    setInputFeedback(null);
-                  }}
-                  disabled={isSubmitting}
-                  className="text-xs text-slate-400 hover:text-slate-200 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
-                >
-                  Clear conversation
-                </button>
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
@@ -560,19 +631,34 @@ export const ClarificationEngineWorkspace: React.FC<
             <span className="text-xs font-medium text-slate-400">
               Try an example question:
             </span>
-            <button
-              type="button"
-              onClick={() => setShowDataReference((prev) => !prev)}
-              aria-expanded={showDataReference}
-              className="inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
-            >
-              <Database className="w-3.5 h-3.5" />
-              <span>
-                {showDataReference
-                  ? 'Hide Data Reference (Tables, Glossary & Join Hints)'
-                  : 'Data Reference (Tables, Glossary & Join Hints)'}
-              </span>
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowQueryHistory((prev) => !prev)}
+                aria-expanded={showQueryHistory}
+                className="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>
+                  {showQueryHistory
+                    ? 'Hide Query History'
+                    : `Query History (${historyCount})`}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDataReference((prev) => !prev)}
+                aria-expanded={showDataReference}
+                className="inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>
+                  {showDataReference
+                    ? 'Hide Data Reference'
+                    : 'Data Reference'}
+                </span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
@@ -590,6 +676,14 @@ export const ClarificationEngineWorkspace: React.FC<
           </div>
         </div>
       </section>
+
+      {/* Query History Panel (Stores & Displays Recent SQL Queries, with Direct Re-run) */}
+      <QueryHistoryPanel
+        dbClient={dbClient}
+        onLoadQuestion={handleLoadQuestionFromHistory}
+        isOpen={showQueryHistory}
+        onToggleOpen={() => setShowQueryHistory((prev) => !prev)}
+      />
 
       {/* Collapsible Data Reference (Schema, Join Hints & Business Glossary) */}
       {showDataReference && (

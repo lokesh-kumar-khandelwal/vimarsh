@@ -469,3 +469,18 @@ export interface TestCaseResult {
   durationMs: number;
 }
 
+/**
+ * Ask Data: Query History Entry for storing and displaying past executed queries
+ */
+export interface QueryHistoryEntry {
+  id: string;
+  question: string;
+  sql: string;
+  timestamp: string;
+  rowCount: number;
+  executionTimeMs: number;
+  tablesUsed: string[];
+  status: 'SUCCESS';
+}
+
+

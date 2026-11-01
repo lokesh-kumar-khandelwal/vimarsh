@@ -56,6 +56,7 @@ import {
   type SessionStore,
 } from './sessionStore';
 import { validateSqlStatic } from './sqlValidator';
+import { recordQueryExecution } from './queryHistory';
 
 export const MAX_JSON_FORMAT_RETRIES = 1;
 export const MAX_SQL_REPAIR_ATTEMPTS = 2;
@@ -971,6 +972,14 @@ export async function runQuestionPipeline(
           trace,
           timestamp: new Date().toISOString(),
         };
+        recordQueryExecution({
+          question: userTurn.question,
+          sql: validatedSql,
+          rowCount: executionResult.rowCount,
+          executionTimeMs: executionResult.executionTimeMs,
+          tablesUsed: astTablesUsed,
+          status: 'SUCCESS',
+        });
         const nextSession = session.recordTurnPair(userTurn, assistantTurn);
         return { userTurn, assistantTurn, sessionState: nextSession };
       }
