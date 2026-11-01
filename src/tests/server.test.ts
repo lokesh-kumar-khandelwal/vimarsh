@@ -6,9 +6,11 @@ import {
   GEMINI_MODEL,
 } from '../config';
 import {
+  checkRateLimit,
   cleanupExpiredRateLimits,
   createExpressApp,
   MAX_CONCURRENT_REQUESTS,
+  MAX_RATE_LIMIT_TRACKED_IPS,
   MAX_SYSTEM_INSTRUCTION_LENGTH,
   MAX_USER_CONTENT_LENGTH,
   RATE_LIMIT_MAX_REQUESTS,
@@ -108,30 +110,37 @@ describe('Vimarsh Server API & Security Hardening Test Suite', () => {
       expect(json.errorCategory).toBe('byok_required');
     });
 
-    // Production without platform auth must fail closed even with ALLOW_SERVER_MANAGED_KEY=true
+    // Production fails closed and rejects arbitrary identity headers (x-goog-authenticated-user-email, x-authenticated-user)
     process.env.NODE_ENV = 'production';
     process.env.ALLOW_SERVER_MANAGED_KEY = 'true';
     const prodApp = createExpressApp();
 
     await withServer(prodApp, async (baseUrl) => {
-      const res = await fetch(`${baseUrl}/api/gemini/generate`, {
+      const resHeader = await fetch(`${baseUrl}/api/gemini/generate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-authenticated-user-email': 'accounts.google.com:attacker@example.com',
+          'x-authenticated-user': 'attacker',
+        },
         body: JSON.stringify({
           userContent: 'Show me all customers',
           purpose: 'query',
           schemaId: 'vimarsh_response',
         }),
       });
-      expect(res.status).toBe(401);
-      const json = await res.json();
+      // Must fail closed: arbitrary identity headers are not trusted authentication
+      expect(resHeader.status).toBe(401);
+      const json = await resHeader.json();
       expect(json.byokRequired).toBe(true);
       expect(json.errorCategory).toBe('byok_required');
     });
 
-    // Production WITH verified platform identity header succeeds
+    // In local development with loopback and ALLOW_SERVER_MANAGED_KEY=true, loopback access is authorized
+    process.env.NODE_ENV = 'development';
+    process.env.ALLOW_SERVER_MANAGED_KEY = 'true';
     let calledKey = '';
-    const authApp = createExpressApp({
+    const devAuthApp = createExpressApp({
       clientFactory: (key: string) => {
         calledKey = key;
         return {
@@ -142,20 +151,17 @@ describe('Vimarsh Server API & Security Hardening Test Suite', () => {
       },
     });
 
-    await withServer(authApp, async (authUrl) => {
-      const resAuth = await fetch(`${authUrl}/api/gemini/generate`, {
+    await withServer(devAuthApp, async (devUrl) => {
+      const resDev = await fetch(`${devUrl}/api/gemini/generate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-authenticated-user-email': 'accounts.google.com:test@example.com',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userContent: 'Show me all customers',
           purpose: 'query',
           schemaId: 'vimarsh_response',
         }),
       });
-      expect(resAuth.status).toBe(200);
+      expect(resDev.status).toBe(200);
       expect(calledKey).toBe('AIzaSyEnvKey');
     });
   });
@@ -809,16 +815,32 @@ describe('Vimarsh Server API & Security Hardening Test Suite', () => {
     15_000
   );
 
-  // 16. Rate-limiter memory management: Pruning expired IP entries
-  it('16. Rate limiter memory: cleanupExpiredRateLimits purges stale IP entries', () => {
-    // Manually test rate limit pruning
-    const _ipA = '192.168.1.1';
-    const _ipB = '192.168.1.2';
+  // 16. Rate-limiter memory management: Pruning expired IP entries and hard capacity ceiling
+  it('16. Rate limiter memory: cleanupExpiredRateLimits purges stale IP entries and enforces hard capacity ceiling', () => {
+    resetRateLimitsAndConcurrency();
     const now = Date.now();
 
-    // Call checkRateLimit at simulated past time
-    // Cleanup reference time in the future
-    cleanupExpiredRateLimits(now + 120_000);
-    expect(true).toBe(true);
+    // Fill map up to MAX_RATE_LIMIT_TRACKED_IPS (1,000 distinct IPs)
+    for (let i = 0; i < MAX_RATE_LIMIT_TRACKED_IPS; i++) {
+      const res = checkRateLimit(`10.100.${Math.floor(i / 256)}.${i % 256}`);
+      expect(res.allowed).toBe(true);
+    }
+
+    // Attempting a 1,001st untracked IP while all 1,000 are active must fail closed safely
+    const overflowAttempt = checkRateLimit('10.200.0.1');
+    expect(overflowAttempt.allowed).toBe(false);
+    expect(overflowAttempt.capacityExceeded).toBe(true);
+    expect(overflowAttempt.retryAfterSeconds).toBe(5);
+
+    // Existing tracked IP can still make requests within its 30 req/min limit
+    const existingAttempt = checkRateLimit('10.100.0.0');
+    expect(existingAttempt.allowed).toBe(true);
+
+    // After window expires (e.g. +70 seconds), cleanup prunes stale entries
+    cleanupExpiredRateLimits(now + 70_000);
+
+    // Now a new IP is admitted safely
+    const newAfterPrune = checkRateLimit('10.200.0.1');
+    expect(newAfterPrune.allowed).toBe(true);
   });
 });

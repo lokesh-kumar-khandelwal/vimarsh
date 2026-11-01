@@ -21,12 +21,12 @@ export const FALLBACK_GEMINI_MODELS = ['gemini-3.1-flash-lite'] as const;
 
 /**
  * Explicit timing policy:
- * - Connection-probe timeout: 25 seconds maximum (aligned with per-request timeout).
+ * - Connection-probe timeout: 15 seconds maximum.
  * - Individual model request timeout: 25 seconds maximum.
  * - Entire server-side generation operation (including allowed fallback): 30 seconds maximum.
  * - Entire question pipeline deadline: 60 seconds maximum (including JSON retries and SQL repairs).
  */
-export const CONNECT_PROBE_TIMEOUT_MS = 25_000;
+export const CONNECT_PROBE_TIMEOUT_MS = 15_000;
 export const PER_REQUEST_TIMEOUT_MS = 25_000;
 export const SERVER_OPERATION_TIMEOUT_MS = 30_000;
 export const PER_QUESTION_DEADLINE_MS = 60_000;

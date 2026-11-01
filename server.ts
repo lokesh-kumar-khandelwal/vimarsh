@@ -104,14 +104,23 @@ export function getClientIp(req: Request): string {
 
 /**
  * Checks in-memory rate limits with opportunistic pruning of expired timestamps
- * and bounded map memory to prevent leak when queried by many distinct IPs.
+ * and a hard-bounded map capacity to prevent memory leaks while failing safely when full.
  */
-export function checkRateLimit(ip: string): { allowed: boolean; retryAfterSeconds: number } {
+export function checkRateLimit(ip: string): {
+  allowed: boolean;
+  retryAfterSeconds: number;
+  capacityExceeded?: boolean;
+} {
   const now = Date.now();
 
-  // Opportunistic memory pruning if tracked map size exceeds threshold
-  if (ipRequestHistory.size > MAX_RATE_LIMIT_TRACKED_IPS) {
+  // If map is near capacity or incoming IP is untracked, prune expired timestamps and records
+  if (ipRequestHistory.size >= MAX_RATE_LIMIT_TRACKED_IPS * 0.8 || !ipRequestHistory.has(ip)) {
     cleanupExpiredRateLimits(now);
+  }
+
+  // If the map is still at hard capacity and this IP is untracked, fail closed safely (5s retry)
+  if (!ipRequestHistory.has(ip) && ipRequestHistory.size >= MAX_RATE_LIMIT_TRACKED_IPS) {
+    return { allowed: false, retryAfterSeconds: 5, capacityExceeded: true };
   }
 
   const activeTimestamps = (ipRequestHistory.get(ip) ?? []).filter(
@@ -150,7 +159,8 @@ export function resetRateLimitsAndConcurrency(): void {
  * Policy:
  * 1. Disabled by default in all environments (including development).
  * 2. Requires ALLOW_SERVER_MANAGED_KEY=true AND an environment API key.
- * 3. In production, requires verified trusted platform identity header (e.g. Google Cloud IAP header 'x-goog-authenticated-user-email' or verified reverse proxy 'x-authenticated-user').
+ * 3. In production, server-managed mode strictly fails closed to require BYOK,
+ *    as unverified HTTP headers (e.g. x-authenticated-user) must never be trusted without a cryptographic verifier.
  * 4. In development, requires loopback client IP (127.0.0.1, ::1, or localhost) to prevent exposing shared keys on public dev tunnels.
  */
 export function isServerManagedKeyAuthorized(req: Request): boolean {
@@ -163,13 +173,9 @@ export function isServerManagedKeyAuthorized(req: Request): boolean {
   }
   const isProduction = process.env.NODE_ENV === 'production';
   if (isProduction) {
-    // Production requires genuine platform identity
-    const iapUser = req.headers['x-goog-authenticated-user-email'];
-    const authUser = req.headers['x-authenticated-user'];
-    return (
-      (typeof iapUser === 'string' && iapUser.length > 0) ||
-      (typeof authUser === 'string' && authUser.length > 0)
-    );
+    // For this academic submission scope, without a dedicated cryptographic JWT signature verifier,
+    // server-managed mode strictly fails closed in production. Unverified headers are never trusted.
+    return false;
   }
   // In development, require local loopback request
   const ip = req.ip || req.socket.remoteAddress || '';
@@ -348,8 +354,10 @@ export function createExpressApp(options?: ServerAppOptions): express.Express {
       res.status(429).json({
         ok: false,
         status: 429,
-        errorCategory: 'rate_limit_exceeded',
-        message: `Too many requests. Please wait ${rateCheck.retryAfterSeconds} seconds before trying again.`,
+        errorCategory: rateCheck.capacityExceeded ? 'service_unavailable' : 'rate_limit_exceeded',
+        message: rateCheck.capacityExceeded
+          ? 'Rate limiter at maximum tracking capacity. Please retry in 5 seconds.'
+          : `Too many requests. Please wait ${rateCheck.retryAfterSeconds} seconds before trying again.`,
         retryable: false,
         retryAfterSeconds: rateCheck.retryAfterSeconds,
       });

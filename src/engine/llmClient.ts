@@ -136,20 +136,41 @@ export const defaultGeminiTransport: LlmTransportFn = async (
       params.schemaId ??
       (params.schemaOverride === CONNECT_PROBE_SCHEMA ? 'connection_probe' : 'vimarsh_response');
 
-    const response = await window.fetch('/api/gemini/generate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        apiKey: cleanKey,
-        systemInstruction: params.systemInstruction,
-        userContent: params.userContent,
-        purpose,
-        schemaId,
-      }),
-      signal: params.abortSignal,
-    });
+    let response: Response;
+    try {
+      response = await window.fetch('/api/gemini/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          apiKey: cleanKey,
+          systemInstruction: params.systemInstruction,
+          userContent: params.userContent,
+          purpose,
+          schemaId,
+        }),
+        signal: params.abortSignal,
+      });
+    } catch (fetchErr) {
+      if (params.abortSignal?.aborted) {
+        throw new DOMException('Request aborted', 'AbortError');
+      }
+      const fetchErrorMsg =
+        fetchErr instanceof Error ? fetchErr.message : 'Network connection failed';
+      const proxyNetworkErr = new Error(
+        `Failed to reach Vimarsh server proxy: ${fetchErrorMsg}. Please check your connection and retry.`
+      ) as Error & { status?: number; classified?: ClassifiedApiError };
+      proxyNetworkErr.status = 503;
+      proxyNetworkErr.classified = {
+        httpStatus: 503,
+        retryable: false, // Server owns upstream retries; browser never automatically replays ambiguous proxy POST
+        retryAfterMs: null,
+        category: 'network_error',
+        safeMessage: `Failed to reach Vimarsh server proxy: ${fetchErrorMsg}. Please check your connection and retry.`,
+      };
+      throw proxyNetworkErr;
+    }
 
     let payload: {
       ok?: boolean;

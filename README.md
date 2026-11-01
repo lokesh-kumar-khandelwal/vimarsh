@@ -103,7 +103,7 @@ Vimarsh supports two distinct, isolated credential modes:
 - **Fallback Model**: `gemini-3.1-flash-lite` — Exactly one fallback model, attempted only for temporary service unavailability (HTTP 503) or model unavailability (HTTP 404), and only when at least 10 seconds of request deadline budget remains.
 
 ### Timeouts & Deadlines
-- **Connection Probe Timeout**: 25 seconds (`CONNECT_PROBE_TIMEOUT_MS = 25_000`).
+- **Connection Probe Timeout**: 15 seconds (`CONNECT_PROBE_TIMEOUT_MS = 15_000`).
 - **Per-Request Timeout**: 25 seconds (`PER_REQUEST_TIMEOUT_MS = 25_000`).
 - **Server Operation Ceiling**: 30 seconds (`SERVER_OPERATION_TIMEOUT_MS = 30_000`).
 - **Per-Question Overall Deadline**: 60 seconds (`PER_QUESTION_DEADLINE_MS = 60_000`) encompassing all JSON retries and SQL repairs.
