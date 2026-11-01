@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -125,26 +125,49 @@ export function App() {
     []
   );
 
+  const initSequenceRef = useRef<number>(0);
+
   const initializeOrResetWorker = useCallback(
     async (isReset = false) => {
+      const currentSeq = ++initSequenceRef.current;
       setIsLoading(true);
       setErrorMessage(null);
+      if (isReset) {
+        setSchemaContext(null);
+        setSeedReport(null);
+      }
       try {
         const initPayload = isReset
           ? await dbClient.reset()
           : await dbClient.init();
+
+        if (initSequenceRef.current !== currentSeq) {
+          return;
+        }
+
         const freshSchema = await dbClient.getSchemaContext();
+        if (initSequenceRef.current !== currentSeq) {
+          return;
+        }
+
         setSeedReport(initPayload.seedReport);
         setSchemaContext(freshSchema);
         await executeAllSelfTests(initPayload.seedReport, freshSchema);
       } catch (err) {
+        if (initSequenceRef.current !== currentSeq) {
+          return;
+        }
         const msg =
           err instanceof Error
             ? err.message
             : 'Failed to initialize SQLite Web Worker.';
         setErrorMessage(msg);
+        setSchemaContext(null);
+        setSeedReport(null);
       } finally {
-        setIsLoading(false);
+        if (initSequenceRef.current === currentSeq) {
+          setIsLoading(false);
+        }
       }
     },
     [executeAllSelfTests]
@@ -159,15 +182,21 @@ export function App() {
       await initializeOrResetWorker(false);
       return;
     }
+    const currentSeq = ++initSequenceRef.current;
     setIsLoading(true);
+    setErrorMessage(null);
     try {
       const refreshedSchema = await dbClient.getSchemaContext();
+      if (initSequenceRef.current !== currentSeq) return;
       setSchemaContext(refreshedSchema);
       await executeAllSelfTests(seedReport, refreshedSchema);
     } catch (err) {
+      if (initSequenceRef.current !== currentSeq) return;
       setErrorMessage(err instanceof Error ? err.message : String(err));
     } finally {
-      setIsLoading(false);
+      if (initSequenceRef.current === currentSeq) {
+        setIsLoading(false);
+      }
     }
   }, [seedReport, schemaContext, executeAllSelfTests, initializeOrResetWorker]);
 

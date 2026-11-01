@@ -50,14 +50,24 @@ async function ensureSqlEngine(): Promise<{
     sqlEngine = SQL;
     wasmSourceUsed = 'cdn';
     return { SQL, wasmSource: 'cdn' };
-  } catch {
-    // Fallback to /sql-wasm.wasm in /public
-    const SQL = await initSqlJs({
-      locateFile: (file: string) => getSqlWasmFallbackUrl(file),
-    });
-    sqlEngine = SQL;
-    wasmSourceUsed = 'public-fallback';
-    return { SQL, wasmSource: 'public-fallback' };
+  } catch (cdnErr) {
+    try {
+      // Fallback to /sql-wasm.wasm in /public
+      const SQL = await initSqlJs({
+        locateFile: (file: string) => getSqlWasmFallbackUrl(file),
+      });
+      sqlEngine = SQL;
+      wasmSourceUsed = 'public-fallback';
+      return { SQL, wasmSource: 'public-fallback' };
+    } catch (fallbackErr) {
+      const cdnMsg = cdnErr instanceof Error ? cdnErr.message : String(cdnErr);
+      const fallbackMsg =
+        fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      throw new Error(
+        `Failed to initialize SQLite WebAssembly engine (CDN error: ${cdnMsg}; Local fallback error: ${fallbackMsg})`,
+        { cause: fallbackErr }
+      );
+    }
   }
 }
 
@@ -79,6 +89,7 @@ async function handleInitOrReset(nowIsoLocal?: string): Promise<InitSuccessPaylo
     }
     activeDb = null;
   }
+  cachedInitPayload = null;
 
   const now = resolveNowDate(nowIsoLocal);
   const { db, initPayload } = createAndSeedDatabase(SQL, now, wasmSource);

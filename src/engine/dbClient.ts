@@ -48,6 +48,7 @@ export class DbClient {
   private lastInitPayload: InitSuccessPayload | null = null;
   private lastNowIsoLocal: string | undefined = undefined;
   private readonly workerFactory?: () => Worker;
+  private initPromise: Promise<InitSuccessPayload> | null = null;
 
   constructor(workerFactory?: () => Worker) {
     this.workerFactory = workerFactory;
@@ -55,6 +56,10 @@ export class DbClient {
 
   public getState(): DbClientState {
     return this.state;
+  }
+
+  public isReady(): boolean {
+    return this.state === 'ready';
   }
 
   public getLastError(): string | null {
@@ -118,8 +123,10 @@ export class DbClient {
     worker.onerror = (errEvent: ErrorEvent) => {
       const errMsg =
         errEvent.message || 'Web Worker encountered an unexpected runtime error.';
-      this.state = 'error';
-      this.lastError = errMsg;
+      if (this.epoch === currentEpoch) {
+        this.state = 'error';
+        this.lastError = errMsg;
+      }
       this.rejectAllPending(new Error(errMsg));
     };
 
@@ -147,6 +154,7 @@ export class DbClient {
     }
     this.epoch += 1;
     this.rejectAllPending(new Error(reasonMessage));
+    this.initPromise = null;
     this.state = 'uninitialized';
   }
 
@@ -195,38 +203,74 @@ export class DbClient {
   /**
    * Initializes the Worker database, runs the connection setup sequence,
    * seeds deterministic data, validates all seed guarantees, and loads the schema.
+   * If an initialization is already actively in flight, reuses that promise to prevent
+   * racing worker lifecycles.
    */
   public async init(nowIsoLocal?: string): Promise<InitSuccessPayload> {
-    this.state = 'initializing';
-    this.lastError = null;
-    this.lastNowIsoLocal = nowIsoLocal;
-
-    try {
-      this.terminate('Re-initializing worker');
-      this.state = 'initializing';
-      this.spawnWorker();
-
-      const result = await this.sendRequest<InitSuccessPayload>(
-        'INIT',
-        nowIsoLocal ? { nowIsoLocal } : undefined
-      );
-      this.lastInitPayload = result;
-      this.state = 'ready';
-      return result;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.state = 'error';
-      this.lastError = msg;
-      throw err;
+    if (this.state === 'initializing' && this.initPromise) {
+      return this.initPromise;
     }
+    return this.performInit(nowIsoLocal, false);
   }
 
   /**
    * Resets the database by terminating the existing worker, spawning a fresh worker,
-   * and re-running the full connection setup sequence.
+   * and re-running the full connection setup sequence. Always forces a clean restart.
    */
   public async reset(nowIsoLocal?: string): Promise<InitSuccessPayload> {
-    return this.init(nowIsoLocal ?? this.lastNowIsoLocal);
+    return this.performInit(nowIsoLocal ?? this.lastNowIsoLocal, true);
+  }
+
+  private async performInit(nowIsoLocal?: string, force = false): Promise<InitSuccessPayload> {
+    if (!force && this.state === 'initializing' && this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.lastNowIsoLocal = nowIsoLocal;
+
+    // Terminate existing worker and reject older pending requests
+    this.terminate(force ? 'Resetting database worker' : 'Re-initializing database worker');
+    this.state = 'initializing';
+    this.lastError = null;
+
+    const attemptEpoch = this.epoch + 1;
+
+    const doInit = async (): Promise<InitSuccessPayload> => {
+      try {
+        this.spawnWorker();
+
+        const result = await this.sendRequest<InitSuccessPayload>(
+          'INIT',
+          nowIsoLocal ? { nowIsoLocal } : undefined
+        );
+
+        if (this.epoch === attemptEpoch) {
+          this.lastInitPayload = result;
+          this.state = 'ready';
+          this.lastError = null;
+        }
+        return result;
+      } catch (err) {
+        if (this.epoch === attemptEpoch) {
+          const rawMsg = err instanceof Error ? err.message : String(err);
+          const userMsg =
+            rawMsg === TIMEOUT_SENTINEL
+              ? 'Database initialization timed out waiting for SQLite Web Worker (sql.js WASM). Please check your connection or retry.'
+              : rawMsg;
+          this.state = 'error';
+          this.lastError = userMsg;
+          throw new Error(userMsg, { cause: err });
+        }
+        throw err;
+      } finally {
+        if (this.epoch === attemptEpoch) {
+          this.initPromise = null;
+        }
+      }
+    };
+
+    this.initPromise = doInit();
+    return this.initPromise;
   }
 
   /**
