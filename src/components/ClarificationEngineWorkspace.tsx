@@ -30,6 +30,7 @@ import {
   SQL_JS_VERSION,
 } from '../config';
 import { auditLog } from '../engine/auditLog';
+import { exportRowsToCsv, generateCsvFilename } from '../engine/csvExport';
 import type { DbClient } from '../engine/dbClient';
 import { runInputGuard } from '../engine/inputGuard';
 import { getLastProbeTelemetry } from '../engine/llmClient';
@@ -264,6 +265,27 @@ function classifyErrorTurnHeading(reason: string | null): {
   return { title: 'Could Not Process Request', category: 'general' };
 }
 
+function getScrollBehavior(): ScrollBehavior {
+  if (typeof window === 'undefined') return 'auto';
+  if (typeof window.matchMedia !== 'function') return 'smooth';
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 'auto'
+    : 'smooth';
+}
+
+function scrollToTarget(
+  el: HTMLElement | null,
+  block: ScrollLogicalPosition = 'start'
+): void {
+  if (!el || typeof el.scrollIntoView !== 'function') return;
+  const behavior = getScrollBehavior();
+  try {
+    el.scrollIntoView({ behavior, block });
+  } catch {
+    el.scrollIntoView();
+  }
+}
+
 export const ClarificationEngineWorkspace: React.FC<
   ClarificationEngineWorkspaceProps
 > = ({
@@ -279,6 +301,7 @@ export const ClarificationEngineWorkspace: React.FC<
   );
   const [questionInput, setQuestionInput] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submittingQuestion, setSubmittingQuestion] = useState<string | null>(null);
   const [inputFeedback, setInputFeedback] = useState<string | null>(null);
   const [showDataReference, setShowDataReference] = useState<boolean>(false);
   const [showQueryHistory, setShowQueryHistory] = useState<boolean>(false);
@@ -295,6 +318,40 @@ export const ClarificationEngineWorkspace: React.FC<
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const questionInputRef = useRef<HTMLInputElement | null>(null);
+  const loadingBannerRef = useRef<HTMLElement | null>(null);
+  const latestTurnRef = useRef<HTMLElement | null>(null);
+  const latestResponseRef = useRef<HTMLElement | null>(null);
+  const pendingAutoScrollRef = useRef<'loading' | 'response' | null>(null);
+
+  // Auto-scroll effect 1: Smoothly bring the loading banner into view when a question is submitted
+  useEffect(() => {
+    if (isSubmitting && pendingAutoScrollRef.current === 'loading') {
+      const rafId = requestAnimationFrame(() => {
+        scrollToTarget(loadingBannerRef.current, 'start');
+      });
+      pendingAutoScrollRef.current = 'response';
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [isSubmitting]);
+
+  // Auto-scroll effect 2: Smoothly bring the newly rendered response and question into view
+  useEffect(() => {
+    if (!isSubmitting && pendingAutoScrollRef.current === 'response') {
+      pendingAutoScrollRef.current = null;
+      setSubmittingQuestion(null);
+      let innerRafId: number;
+      const outerRafId = requestAnimationFrame(() => {
+        innerRafId = requestAnimationFrame(() => {
+          const target = latestTurnRef.current ?? latestResponseRef.current;
+          scrollToTarget(target, 'start');
+        });
+      });
+      return () => {
+        cancelAnimationFrame(outerRafId);
+        if (innerRafId) cancelAnimationFrame(innerRafId);
+      };
+    }
+  }, [sessionState.turns.length, isSubmitting]);
 
   useEffect(() => {
     const unsubSession = sessionStore.subscribe(setSessionState);
@@ -369,6 +426,8 @@ export const ClarificationEngineWorkspace: React.FC<
     setInputFeedback(null);
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    setSubmittingQuestion(trimmed);
+    pendingAutoScrollRef.current = 'loading';
     setIsSubmitting(true);
     setQuestionInput('');
 
@@ -457,6 +516,22 @@ export const ClarificationEngineWorkspace: React.FC<
       return direction === 'asc' ? sa.localeCompare(sb) : sb.localeCompare(sa);
     });
     return copy;
+  };
+
+  const [downloadedTurnId, setDownloadedTurnId] = useState<string | null>(null);
+
+  const handleDownloadCsv = (
+    turnId: string,
+    execResult: QueryExecutionResult,
+    question?: string
+  ) => {
+    const sortedRows = getSortedRows(turnId, execResult.rows);
+    const filename = generateCsvFilename(question);
+    exportRowsToCsv(execResult.columns, sortedRows, filename);
+    setDownloadedTurnId(turnId);
+    setTimeout(() => {
+      setDownloadedTurnId((curr) => (curr === turnId ? null : curr));
+    }, 2000);
   };
 
   const turns = sessionState.turns;
@@ -695,47 +770,18 @@ export const ClarificationEngineWorkspace: React.FC<
         />
       )}
 
-      {/* Loading State Banner */}
-      {isSubmitting && (
-        <section
-          role="status"
-          aria-live="polite"
-          aria-label="Checking question and preparing query"
-          className="rounded-xl border border-sky-800/70 bg-slate-900/90 p-5 flex flex-wrap items-center justify-between gap-4"
-        >
-          <div className="flex items-center gap-3">
-            <RefreshCw className="w-5 h-5 text-sky-400 animate-spin shrink-0" />
-            <div className="space-y-0.5">
-              <p className="text-sm font-medium text-slate-100">
-                Checking your question and preparing the query...
-              </p>
-              <p className="text-xs text-slate-400">
-                Validating against schema rules, checking for ambiguity, and
-                verifying read-only SQL safety.
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleCancelRequest}
-            className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
-          >
-            Cancel
-          </button>
-        </section>
-      )}
-
       {/* Query Interaction & Results Timeline */}
       {turns.length > 0 && (
         <section aria-label="Questions and Results" className="space-y-4">
           {turns.map((turn, idx) => {
             if (turn.role === 'user') {
+              const isLatestUserTurn = idx === turns.length - 2;
               return (
                 <article
                   key={turn.id}
+                  ref={isLatestUserTurn ? latestTurnRef : undefined}
                   aria-label="Your Question"
-                  className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 flex items-start justify-between gap-4"
+                  className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 flex items-start justify-between gap-4 scroll-mt-20"
                 >
                   <div className="space-y-0.5">
                     <div className="text-xs font-medium text-slate-400">
@@ -768,14 +814,16 @@ export const ClarificationEngineWorkspace: React.FC<
             const errorClassification = aTurn.processingError
               ? classifyErrorTurnHeading(response.rejection_reason)
               : null;
+            const isLatestAssistantTurn = idx === turns.length - 1;
 
             return (
               <article
                 key={aTurn.id}
+                ref={isLatestAssistantTurn ? latestResponseRef : undefined}
                 aria-label={`Vimarsh ${
                   aTurn.processingError ? 'Error' : response.status
                 } Response`}
-                className={`rounded-xl border p-5 space-y-4 ${
+                className={`rounded-xl border p-5 space-y-4 scroll-mt-20 ${
                   response.status === 'SUCCESS'
                     ? 'border-slate-800 bg-slate-900/85'
                     : response.status === 'CLARIFY'
@@ -949,16 +997,50 @@ export const ClarificationEngineWorkspace: React.FC<
                     ) : (
                       aTurn.executionResult && (
                         <>
-                          {factualSummary && (
-                            <div className="rounded-lg border border-slate-800 bg-slate-950/80 px-4 py-3 flex flex-wrap items-baseline justify-between gap-2">
-                              <div className="text-base font-semibold text-slate-100 font-mono tabular-nums">
-                                {factualSummary.headline}
-                              </div>
-                              <div className="text-xs text-slate-400 font-mono tabular-nums">
-                                {factualSummary.subline}
-                              </div>
+                          <div className="rounded-lg border border-slate-800 bg-slate-950/80 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                            <div className="space-y-0.5 min-w-[200px]">
+                              {factualSummary ? (
+                                <>
+                                  <div className="text-base font-semibold text-slate-100 font-mono tabular-nums">
+                                    {factualSummary.headline}
+                                  </div>
+                                  <div className="text-xs text-slate-400 font-mono tabular-nums">
+                                    {factualSummary.subline}
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="text-sm font-semibold text-slate-100 font-mono tabular-nums">
+                                  Query Results ({aTurn.executionResult.rowCount}{' '}
+                                  {aTurn.executionResult.rowCount === 1 ? 'row' : 'rows'})
+                                </div>
+                              )}
                             </div>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleDownloadCsv(
+                                  aTurn.id,
+                                  aTurn.executionResult!,
+                                  prevUserTurn?.question
+                                )
+                              }
+                              aria-label="Download query results as CSV"
+                              title="Download query results as CSV"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 shrink-0"
+                            >
+                              {downloadedTurnId === aTurn.id ? (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span className="text-emerald-300">Downloaded CSV</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                                  <span>Download CSV</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
 
                           <div className="rounded-lg border border-slate-800 bg-slate-950 overflow-hidden">
                             {aTurn.executionResult.truncated && (
@@ -1178,6 +1260,43 @@ export const ClarificationEngineWorkspace: React.FC<
               </article>
             );
           })}
+        </section>
+      )}
+
+      {/* Loading State Banner */}
+      {isSubmitting && (
+        <section
+          ref={loadingBannerRef}
+          role="status"
+          aria-live="polite"
+          aria-label="Checking question and preparing query"
+          className="rounded-xl border border-sky-800/70 bg-slate-900/90 p-5 flex flex-wrap items-center justify-between gap-4 scroll-mt-20"
+        >
+          <div className="flex items-center gap-3">
+            <RefreshCw className="w-5 h-5 text-sky-400 animate-spin shrink-0" />
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium text-slate-100">
+                Checking your question and preparing the query...
+              </p>
+              {submittingQuestion && (
+                <p className="text-xs text-sky-300 font-medium whitespace-pre-wrap break-words">
+                  &ldquo;{submittingQuestion}&rdquo;
+                </p>
+              )}
+              <p className="text-xs text-slate-400">
+                Validating against schema rules, checking for ambiguity, and
+                verifying read-only SQL safety.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleCancelRequest}
+            className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+          >
+            Cancel
+          </button>
         </section>
       )}
     </div>

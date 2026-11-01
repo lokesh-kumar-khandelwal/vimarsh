@@ -23,6 +23,7 @@ import {
   removeQueryHistoryEntry,
   subscribeQueryHistory,
 } from '../engine/queryHistory';
+import { exportRowsToCsv, generateCsvFilename } from '../engine/csvExport';
 import type {
   QueryExecutionResult,
   QueryHistoryEntry,
@@ -54,31 +55,6 @@ function formatRelativeTime(isoString: string): string {
   } catch {
     return 'Recently';
   }
-}
-
-function exportRowsToCsv(columns: string[], rows: SqlCellValue[][], filename: string): void {
-  const escapeCsvCell = (val: SqlCellValue): string => {
-    if (val === null || val === undefined) return '';
-    const str = String(val);
-    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-      return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
-  };
-
-  const headerLine = columns.map(escapeCsvCell).join(',');
-  const rowLines = rows.map((r) => r.map(escapeCsvCell).join(','));
-  const csvContent = [headerLine, ...rowLines].join('\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
@@ -443,8 +419,8 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                                 onClick={() =>
                                   exportRowsToCsv(
                                     live.result!.columns,
-                                    live.result!.rows,
-                                    `query-result-${Date.now()}.csv`
+                                    getSortedLiveRows(item.id, live.result!.rows),
+                                    generateCsvFilename(item.question)
                                   )
                                 }
                                 className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-medium underline"
