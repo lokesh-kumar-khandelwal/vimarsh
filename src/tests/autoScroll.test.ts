@@ -1,135 +1,81 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { getScrollBehavior, scrollToTarget } from '../utils/autoScroll';
 
-describe('Auto-Scroll Utilities & Preferences Suite', () => {
-  const originalWindow = (globalThis as any).window;
+/**
+ * Unit tests for production auto-scroll utilities in `src/utils/autoScroll.ts`.
+ * Imports real production functions directly rather than duplicating logic.
+ */
+describe('Auto-scroll behavior on question submission', () => {
+  const originalWindow = globalThis.window;
 
-  afterEach(() => {
-    (globalThis as any).window = originalWindow;
+  beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('1. Returns auto when window is undefined (e.g. SSR / node environment)', () => {
-    delete (globalThis as any).window;
+  afterEach(() => {
+    globalThis.window = originalWindow;
+  });
 
-    const getScrollBehavior = (): ScrollBehavior => {
-      if (typeof window === 'undefined') return 'auto';
-      if (typeof window.matchMedia !== 'function') return 'smooth';
-      return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 'auto'
-        : 'smooth';
-    };
+  it('uses smooth scroll behavior when prefers-reduced-motion is not enabled', () => {
+    const matchMediaMock = vi.fn().mockReturnValue({ matches: false });
+    vi.stubGlobal('window', { matchMedia: matchMediaMock });
+
+    expect(getScrollBehavior()).toBe('smooth');
+    expect(matchMediaMock).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
+  });
+
+  it('falls back to auto scroll behavior when prefers-reduced-motion is enabled', () => {
+    const matchMediaMock = vi.fn().mockReturnValue({ matches: true });
+    vi.stubGlobal('window', { matchMedia: matchMediaMock });
 
     expect(getScrollBehavior()).toBe('auto');
   });
 
-  it('2. Respects prefers-reduced-motion: reduce preference in browser window', () => {
-    (globalThis as any).window = {
-      matchMedia: vi.fn().mockImplementation((query: string) => ({
-        matches: query.includes('prefers-reduced-motion: reduce'),
-        media: query,
-      })),
-    };
-
-    const getScrollBehavior = (): ScrollBehavior => {
-      if (typeof window === 'undefined') return 'auto';
-      if (typeof window.matchMedia !== 'function') return 'smooth';
-      return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 'auto'
-        : 'smooth';
-    };
-
-    expect(getScrollBehavior()).toBe('auto');
-  });
-
-  it('3. Defaults to smooth scrolling when reduced-motion is not requested', () => {
-    (globalThis as any).window = {
-      matchMedia: vi.fn().mockImplementation(() => ({
-        matches: false,
-        media: '',
-      })),
-    };
-
-    const getScrollBehavior = (): ScrollBehavior => {
-      if (typeof window === 'undefined') return 'auto';
-      if (typeof window.matchMedia !== 'function') return 'smooth';
-      return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 'auto'
-        : 'smooth';
-    };
+  it('defaults to smooth when window.matchMedia is not a function', () => {
+    vi.stubGlobal('window', {});
 
     expect(getScrollBehavior()).toBe('smooth');
   });
 
-  it('4. Defaults to smooth scrolling when matchMedia is not a function', () => {
-    (globalThis as any).window = {};
+  it('invokes scrollIntoView on the target element with computed behavior and block position', () => {
+    const matchMediaMock = vi.fn().mockReturnValue({ matches: false });
+    vi.stubGlobal('window', { matchMedia: matchMediaMock });
 
-    const getScrollBehavior = (): ScrollBehavior => {
-      if (typeof window === 'undefined') return 'auto';
-      if (typeof window.matchMedia !== 'function') return 'smooth';
-      return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 'auto'
-        : 'smooth';
-    };
-
-    expect(getScrollBehavior()).toBe('smooth');
-  });
-
-  it('5. Safely handles null elements or environments without scrollIntoView', () => {
-    (globalThis as any).window = {};
-    const scrollToTarget = (
-      el: HTMLElement | null,
-      block: ScrollLogicalPosition = 'start'
-    ): boolean => {
-      if (!el || typeof el.scrollIntoView !== 'function') return false;
-      try {
-        el.scrollIntoView({ behavior: 'smooth', block });
-        return true;
-      } catch {
-        el.scrollIntoView();
-        return true;
-      }
-    };
-
-    expect(scrollToTarget(null)).toBe(false);
-
-    const mockElementWithoutFn = {} as HTMLElement;
-    expect(scrollToTarget(mockElementWithoutFn)).toBe(false);
-
-    const scrollSpy = vi.fn();
-    const mockElementWithFn = {
-      scrollIntoView: scrollSpy,
+    const scrollIntoViewMock = vi.fn();
+    const fakeElement = {
+      scrollIntoView: scrollIntoViewMock,
     } as unknown as HTMLElement;
 
-    expect(scrollToTarget(mockElementWithFn, 'start')).toBe(true);
-    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    scrollToTarget(fakeElement, 'start');
+
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'start',
+    });
   });
 
-  it('4. Falls back cleanly if scrollIntoView throws with options object', () => {
-    const scrollSpy = vi
+  it('safely handles null target elements without throwing', () => {
+    expect(() => scrollToTarget(null, 'start')).not.toThrow();
+  });
+
+  it('falls back to no-arg scrollIntoView if options-based scrollIntoView throws', () => {
+    const matchMediaMock = vi.fn().mockReturnValue({ matches: false });
+    vi.stubGlobal('window', { matchMedia: matchMediaMock });
+
+    const scrollIntoViewMock = vi
       .fn()
       .mockImplementationOnce(() => {
-        throw new TypeError('Failed to execute scrollIntoView with options');
+        throw new Error('Options not supported in legacy browser');
       })
-      .mockImplementationOnce(() => {});
+      .mockImplementationOnce(() => undefined);
 
-    const mockElement = {
-      scrollIntoView: scrollSpy,
+    const fakeElement = {
+      scrollIntoView: scrollIntoViewMock,
     } as unknown as HTMLElement;
 
-    const scrollToTarget = (
-      el: HTMLElement | null,
-      block: ScrollLogicalPosition = 'start'
-    ): void => {
-      if (!el || typeof el.scrollIntoView !== 'function') return;
-      try {
-        el.scrollIntoView({ behavior: 'smooth', block });
-      } catch {
-        el.scrollIntoView();
-      }
-    };
-
-    scrollToTarget(mockElement, 'start');
-    expect(scrollSpy).toHaveBeenCalledTimes(2);
-    expect(scrollSpy).toHaveBeenLastCalledWith();
+    scrollToTarget(fakeElement, 'start');
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(2);
+    expect(scrollIntoViewMock).toHaveBeenNthCalledWith(2);
   });
 });
