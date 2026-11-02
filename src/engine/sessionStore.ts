@@ -28,6 +28,122 @@ export const DEFAULT_INPUT_HINT =
   'Ask a question about customers, products, orders, order_items, or returns...';
 
 /**
+ * Detects whether an initial user question asks for a breakdown or split of a metric
+ * (e.g. "Break down revenue for last quarter.") without naming the grouping dimension.
+ */
+export function hasUnspecifiedBreakdownDimension(userQuestion: string): boolean {
+  const cleaned = userQuestion.trim();
+  if (!/\b(?:break\s*down|breakdown|split)\b/i.test(cleaned)) {
+    return false;
+  }
+
+  // Strip relative time-range filter phrases (e.g. "for last quarter", "last month", "in the past 90 days")
+  // so period filter nouns are not confused with a grouping grain.
+  const withoutPeriodFilters = cleaned.replace(
+    /\b(?:for|in|during|over|from)?\s*(?:the\s+)?(?:this|last|previous|past|next|prior)\s+(?:\d+\s+)?(?:day|days|week|weeks|month|months|quarter|quarters|year|years)\b/gi,
+    ' '
+  );
+
+  // Check for explicit grouping prepositions ("by ...", "per ...", "across ...", "for each ...")
+  if (/\b(?:by|per|across|into|for\s+each|in\s+each)\s+[a-z_]+/i.test(withoutPeriodFilters)) {
+    return false;
+  }
+
+  // Check for explicit schema or time-grain dimension nouns/adjectives
+  if (
+    /\b(?:categor(?:y|ies)|segment(?:s)?|product(?:s)?|customer(?:s)?|cit(?:y|ies)|state(?:s)?|region(?:s)?|status(?:es)?|reason(?:s)?|daily|weekly|monthly|quarterly|yearly|annual(?:ly)?|day(?:s)?|week(?:s)?|month(?:s)?|quarter(?:s)?|year(?:s)?)\b/i.test(
+      withoutPeriodFilters
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Deterministic clarification policy enforcer for A7 (missing breakdown dimension):
+ * When `pendingClarification` is false and the user asks to break down a metric without
+ * specifying any grouping dimension, prevents the engine from assuming a dimension
+ * (such as product category) or generating/executing SQL before the user clarifies.
+ */
+export function enforceBreakdownDimensionClarification(
+  response: VimarshResponse,
+  userQuestion: string,
+  pendingClarification: boolean
+): { response: VimarshResponse; enforcedA7Clarify: boolean } {
+  if (
+    pendingClarification ||
+    response.status === 'REJECT' ||
+    !hasUnspecifiedBreakdownDimension(userQuestion)
+  ) {
+    return { response, enforcedA7Clarify: false };
+  }
+
+  const mentionsRevenue = /\brevenue\b/i.test(userQuestion);
+  const defaultFollowUp = mentionsRevenue
+    ? 'Which dimension should I use for the revenue breakdown?'
+    : 'Which dimension should I use for the breakdown?';
+  const defaultOptions = [
+    'By product category',
+    'By customer segment',
+    'By month',
+    'By customer state',
+  ];
+
+  if (response.status === 'CLARIFY') {
+    const existingCodes = (response.ambiguity_type ?? '')
+      .split(',')
+      .map((c) => c.trim().toUpperCase())
+      .filter((c) => c.length > 0);
+    const hasA7 = existingCodes.includes('A7');
+    const normalizedAmbiguityType = hasA7
+      ? response.ambiguity_type
+      : ['A7', ...existingCodes].join(', ');
+
+    return {
+      enforcedA7Clarify: !hasA7,
+      response: {
+        ...response,
+        status: 'CLARIFY',
+        ambiguity_type: normalizedAmbiguityType,
+        sql_query: null,
+        follow_up_question:
+          response.follow_up_question && response.follow_up_question.trim().length > 0
+            ? response.follow_up_question
+            : defaultFollowUp,
+        clarification_options:
+          response.clarification_options.length >= 2 &&
+          response.clarification_options.length <= 4
+            ? response.clarification_options
+            : defaultOptions,
+        assumptions: [],
+        tables_used: [],
+        rejection_reason: null,
+      },
+    };
+  }
+
+  // response.status === 'SUCCESS': model falsely assumed a breakdown dimension (e.g. products.category)
+  return {
+    enforcedA7Clarify: true,
+    response: {
+      status: 'CLARIFY',
+      reasoning:
+        "The request asks to break down a metric without naming the grouping dimension. Grouping by product category, customer segment, month, or customer state produces materially different results, so clarification is required before generating or executing SQL (A7).",
+      ambiguity_type: 'A7',
+      sql_query: null,
+      follow_up_question: defaultFollowUp,
+      clarification_options: defaultOptions,
+      assumptions: [],
+      tables_used: [],
+      confidence: Math.min(response.confidence, 0.35),
+      rejection_reason: null,
+    },
+  };
+}
+
+/**
  * Deterministic code enforcement for the 3-round clarification limit:
  * If `currentRound >= 3` and the model returns `CLARIFY`, converts the response to `REJECT`
  * naming the unresolved details and asking the user to rephrase.

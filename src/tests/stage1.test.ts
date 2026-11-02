@@ -224,4 +224,112 @@ describe('Vimarsh Stages 1, 2, 3, 4 & 5 — Full Self-Tests, SQL Safety Engine, 
       }
     }
   });
+
+  it('enforces gold_ambig_08 ("Break down revenue for last quarter."): returns CLARIFY with A7, asks which dimension to use, generates no SQL, executes 0 queries before clarification, and executes after user clarifies', async () => {
+    const SQL = await initSqlJs();
+    const { db, initPayload } = createAndSeedDatabase(
+      SQL,
+      new Date(2026, 9, 28, 12, 0, 0),
+      'node-local'
+    );
+
+    try {
+      const baseRunner = createDirectDbRunner(db);
+      let dryRunCount = 0;
+      let executeCount = 0;
+      const countingRunner = {
+        dryRun: async (sql: Parameters<typeof baseRunner.dryRun>[0]) => {
+          dryRunCount += 1;
+          return baseRunner.dryRun(sql);
+        },
+        execute: async (sql: Parameters<typeof baseRunner.execute>[0]) => {
+          executeCount += 1;
+          return baseRunner.execute(sql);
+        },
+      };
+
+      const { runQuestionPipeline } = await import('../engine/queryPipeline');
+      const { SessionStore } = await import('../engine/sessionStore');
+      const { AuditLogStore } = await import('../engine/auditLog');
+      const { setConnectedApiKey } = await import('../engine/keyStore');
+      setConnectedApiKey('AIzaSyGoldAmbig08TestKey');
+      const session = new SessionStore();
+      const audit = new AuditLogStore();
+
+      // Turn 1: Unclarified "Break down revenue for last quarter." where model tries to assume product category
+      const turn1 = await runQuestionPipeline({
+        rawQuestion: 'Break down revenue for last quarter.',
+        schemaContext: initPayload.schemaContext,
+        dbRunner: countingRunner,
+        session,
+        audit,
+        transport: async () => ({
+          rawText: JSON.stringify({
+            status: 'SUCCESS',
+            reasoning: 'Assumed product category for revenue breakdown.',
+            sql_query:
+              "SELECT p.category, ROUND(SUM(oi.quantity * oi.unit_price * (1 - o.discount_pct / 100.0)), 2) AS total_revenue FROM orders o JOIN order_items oi ON oi.order_id = o.order_id JOIN products p ON p.product_id = oi.product_id WHERE o.status <> 'cancelled' AND o.created_at >= '2026-07-01' AND o.created_at < '2026-10-01' GROUP BY p.category LIMIT 100",
+            follow_up_question: null,
+            clarification_options: [],
+            ambiguity_type: null,
+            assumptions: ['Assumed product category breakdown'],
+            tables_used: ['orders', 'order_items', 'products'],
+            confidence: 0.85,
+            rejection_reason: null,
+          }),
+          finishReason: 'STOP',
+        }),
+      });
+
+      expect(turn1.assistantTurn.response.status).toBe('CLARIFY');
+      expect(turn1.assistantTurn.response.ambiguity_type).toBe('A7');
+      expect(turn1.assistantTurn.response.follow_up_question).toMatch(
+        /dimension.*revenue breakdown/i
+      );
+      expect(turn1.assistantTurn.response.clarification_options.length).toBeGreaterThanOrEqual(2);
+      expect(turn1.assistantTurn.response.sql_query).toBeNull();
+      expect(turn1.assistantTurn.executionResult).toBeUndefined();
+      expect(dryRunCount).toBe(0);
+      expect(executeCount).toBe(0);
+      expect(turn1.sessionState.pending).toEqual({
+        original_question: 'Break down revenue for last quarter.',
+        round: 1,
+      });
+
+      // Turn 2: User clarifies "By product category" -> now SQL is validated and executed
+      const turn2 = await runQuestionPipeline({
+        rawQuestion: 'By product category',
+        schemaContext: initPayload.schemaContext,
+        dbRunner: countingRunner,
+        session,
+        audit,
+        transport: async () => ({
+          rawText: JSON.stringify({
+            status: 'SUCCESS',
+            reasoning: 'User clarified breakdown dimension as product category.',
+            sql_query:
+              "SELECT p.category, ROUND(SUM(oi.quantity * oi.unit_price * (1 - o.discount_pct / 100.0)), 2) AS total_revenue FROM orders o JOIN order_items oi ON oi.order_id = o.order_id JOIN products p ON p.product_id = oi.product_id WHERE o.status <> 'cancelled' AND o.created_at >= '2026-07-01' AND o.created_at < '2026-10-01' GROUP BY p.category ORDER BY total_revenue DESC, p.category ASC LIMIT 100",
+            follow_up_question: null,
+            clarification_options: [],
+            ambiguity_type: null,
+            assumptions: ['Last quarter (2026-07-01 to 2026-10-01) on orders.created_at'],
+            tables_used: ['orders', 'order_items', 'products'],
+            confidence: 0.94,
+            rejection_reason: null,
+          }),
+          finishReason: 'STOP',
+        }),
+      });
+
+      expect(turn2.assistantTurn.response.status).toBe('SUCCESS');
+      expect(turn2.assistantTurn.response.sql_query).toContain('GROUP BY p.category');
+      expect(dryRunCount).toBe(1);
+      expect(executeCount).toBe(1);
+      expect(turn2.sessionState.pending).toBeNull();
+    } finally {
+      const { disconnectApiKey } = await import('../engine/keyStore');
+      disconnectApiKey();
+      db.close();
+    }
+  });
 });

@@ -72,7 +72,7 @@ A3 MISSING TIME SCOPE: the question implies time ("recent", "trend", "latest") w
 A4 VAGUE QUANTITY: "few", "many", "low", "high" without a threshold. ("Top N" without N is governed by D3.)
 A5 JOIN PATH AMBIGUITY: 2+ valid join paths that change the result.
 A6 UNRESOLVED REFERENCE: "them", "that", "the same", "also" that cannot be resolved from the history.
-A7 GRANULARITY: unclear whether to group per customer, product, day, month, region, etc.
+A7 GRANULARITY: unclear whether to group per customer, product, product category, customer segment, day, month, region, etc. Whenever a question asks to "break down", "split", or show a "breakdown" or "distribution" of a metric (for example "Break down revenue for last quarter") without naming the dimension to group by, it is ALWAYS a blocking ambiguity (A7). Never assume product category or any other breakdown dimension.
 A8 ENTITY COLLISION: a value could belong to multiple columns or tables.
 A9 STATUS/VALUE SEMANTICS: a status or controlled-vocabulary word that could mean several values or concepts, or a value outside ENUM_VALUES with no glossary mapping.
 A10 FAN-OUT RISK: a measure could be double counted depending on the join and the intended grain is unclear.
@@ -81,11 +81,11 @@ In "ambiguity_type" list only the codes that actually drove the decision.
 
 # DEFAULT RULES (apply only when the situation they describe actually occurs)
 D1 A term the glossary defines uses the glossary definition.
-D2 A default may resolve a missing detail only if it is explicitly defined, safe, and does not conceal a materially different interpretation.
+D2 A default may resolve a missing detail only if it is explicitly defined, safe, and does not conceal a materially different interpretation. There is NO default grouping or breakdown dimension: if the user asks to "break down" or "split" a metric without naming the dimension, you MUST output CLARIFY with ambiguity_type "A7" and sql_query null.
 D3 "Top N" without N: use 10 ONLY when the ranking metric is itself clear. If the metric is undefined, it is a blocking ambiguity (A2).
 D4 Relative dates ("last month", "this year", "last quarter") use the precomputed DATE_HELPERS boundaries as explicit literals, stated in assumptions.
 D5 Ties in rankings get a deterministic secondary ORDER BY on a stable key.
-D6 DATE BASIS follows the glossary exactly: a status word plus a period applies the period to that status's own timestamp (delivered -> delivered_at, shipped -> shipped_at; cancelled and pending use created_at); revenue with no status or timing word defaults to orders.created_at; return-timing words use returns.returned_at; other order questions with a period or time grouping and no named date column have NO default (A1). State the date basis in assumptions.
+D6 DATE BASIS follows the glossary exactly: a status word plus a period applies the period to that status's own timestamp (delivered -> delivered_at, shipped -> shipped_at; cancelled and pending use created_at); revenue with no status or timing word defaults its date filter to orders.created_at (this resolves only which date column filters the period, never a missing breakdown dimension); return-timing words use returns.returned_at; other order questions with a period or time grouping and no named date column have NO default (A1). State the date basis in assumptions.
 D7 Totals and rankings for revenue, order counts or customer counts with no time wording are answered over all time; state it in assumptions. This does not apply to questions that mention a range, trend or grouping by time.
 D8 A requested row count above 1000 is clamped to 1000 and the clamp is stated in assumptions.
 Never ask about things answerable from the schema or glossary. Never ask about formatting trivia.
@@ -160,6 +160,9 @@ Input: ANSWER, pending true, round 1, history ["user: Show me top customers","as
 
 Input: ANSWER, pending false, round 0, question "Orders by date"
 {"reasoning":"Orders have three date columns and the glossary sets no default date for order counts or listings, so the choice changes the result materially.","ambiguity_type":"A1","status":"CLARIFY","sql_query":null,"follow_up_question":"Which date should I use for the orders?","clarification_options":["Order date (created_at)","Shipped date (shipped_at)","Delivered date (delivered_at)"],"assumptions":[],"tables_used":[],"confidence":0.4,"rejection_reason":null}
+
+Input: ANSWER, pending false, round 0, question "Break down revenue for last quarter"
+{"reasoning":"Revenue and last quarter's date filter (on orders.created_at) are defined, but 'break down' requests a GROUP BY dimension without naming one. Grouping by product category, customer segment, month, or customer state would produce materially different results, so I must ask which dimension to use.","ambiguity_type":"A7","status":"CLARIFY","sql_query":null,"follow_up_question":"Which dimension should I use for the revenue breakdown?","clarification_options":["By product category","By customer segment","By month","By customer state"],"assumptions":[],"tables_used":[],"confidence":0.35,"rejection_reason":null}
 
 Input: ANSWER, pending false, round 0, question "How many customers are in Jaipur?"
 {"reasoning":"City is a free-form column, so I use the exact value the user typed with a case-insensitive comparison. The database decides whether any rows match.","ambiguity_type":null,"status":"SUCCESS","sql_query":"SELECT COUNT(*) AS customer_count FROM customers c WHERE LOWER(c.city) = LOWER('Jaipur') LIMIT 100","follow_up_question":null,"clarification_options":[],"assumptions":["City matched case-insensitively"],"tables_used":["customers"],"confidence":0.93,"rejection_reason":null}

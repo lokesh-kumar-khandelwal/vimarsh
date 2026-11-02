@@ -24,6 +24,11 @@ import {
   serializeConversationHistory,
 } from '../../engine/historySerializer';
 import {
+  disconnectApiKey,
+  getApiKey,
+  setConnectedApiKey,
+} from '../../engine/keyStore';
+import {
   buildSystemPrompt,
   buildUserMessage,
 } from '../../engine/promptBuilder';
@@ -798,12 +803,72 @@ export async function runGoldenSetAndComparatorTestCases(
       malResult.queriesExecuted === 0 &&
       malResult.zeroQueriesOnNonSuccess;
 
+    // Verify gold_ambig_08 ("Break down revenue for last quarter" / "Break down revenue for last quarter.")
+    // returns CLARIFY with A7, asks which dimension to use, generates no SQL, and executes 0 queries
+    // even if a model attempts to assume product category and return SUCCESS.
+    const ambig08Case = GOLDEN_TEST_SUITE.find((t) => t.id === 'gold_ambig_08')!;
+    let ambig08DryRuns = 0;
+    const prevKey = getApiKey();
+    setConnectedApiKey('AIzaSyStage4TestKey9900');
+    let ambig08Verified: boolean;
+    let ambig08StatusStr: string;
+    try {
+      const ambig08Result = await runSingleGoldenTest({
+        testCase: {
+          ...ambig08Case,
+          question: 'Break down revenue for last quarter.',
+        },
+        schemaContext,
+        dbRunner: {
+          dryRun: async (sql) => {
+            ambig08DryRuns += 1;
+            return dbRunner.dryRun(sql);
+          },
+          execute: (sql) => dbRunner.execute(sql),
+        },
+        transport: async () => ({
+          rawText: JSON.stringify({
+            status: 'SUCCESS',
+            reasoning: 'Assumed product category breakdown for last quarter revenue.',
+            sql_query:
+              "SELECT p.category, ROUND(SUM(oi.quantity * oi.unit_price * (1 - o.discount_pct / 100.0)), 2) AS total_revenue FROM orders o JOIN order_items oi ON oi.order_id = o.order_id JOIN products p ON p.product_id = oi.product_id WHERE o.status <> 'cancelled' GROUP BY p.category LIMIT 100",
+            follow_up_question: null,
+            clarification_options: [],
+            ambiguity_type: null,
+            assumptions: ['Assumed product category'],
+            tables_used: ['orders', 'order_items', 'products'],
+            confidence: 0.85,
+            rejection_reason: null,
+          } satisfies VimarshResponse),
+          finishReason: 'STOP',
+        }),
+      });
+
+      ambig08Verified =
+        ambig08Result.runState === 'completed' &&
+        ambig08Result.actualStatus === 'CLARIFY' &&
+        ambig08Result.statusMatched === true &&
+        ambig08Result.ambiguityCodeMatched === true &&
+        ambig08Result.actualAmbiguityCodes.includes('A7') &&
+        ambig08Result.generatedSql === null &&
+        ambig08Result.queriesExecuted === 0 &&
+        ambig08DryRuns === 0 &&
+        ambig08Result.zeroQueriesOnNonSuccess === true;
+      ambig08StatusStr = `${ambig08Result.actualStatus ?? 'null'} (${ambig08Result.actualAmbiguityCodes.join(',')})`;
+    } finally {
+      if (prevKey) {
+        setConnectedApiKey(prevKey);
+      } else {
+        disconnectApiKey();
+      }
+    }
+
     results.push({
       id: 'gold_04_eval_metrics_zero_denom_and_attack_block',
       suite: 'golden_date_proof',
-      name: 'computeEvaluationMetrics returns "n/a" (never NaN) on zero denominators and verifies 0 queries executed on malicious REJECT',
-      passed: noNaN && malBlockedZeroQueries,
-      details: `emptyMetricsAllNa=${noNaN}, malStatus=${malResult.actualStatus}, queriesExecuted=${malResult.queriesExecuted}`,
+      name: 'computeEvaluationMetrics returns "n/a" (never NaN) on zero denominators and verifies 0 queries executed on malicious REJECT and ambiguous CLARIFY (gold_ambig_08 A7)',
+      passed: noNaN && malBlockedZeroQueries && ambig08Verified,
+      details: `emptyMetricsAllNa=${noNaN}, malStatus=${malResult.actualStatus}, ambig08Status=${ambig08StatusStr}, queriesExecuted=${malResult.queriesExecuted}`,
       durationMs: Math.max(0.1, Number((performance.now() - t0).toFixed(2))),
     });
   }

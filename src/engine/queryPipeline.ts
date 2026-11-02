@@ -51,6 +51,7 @@ import {
   validateVimarshResponse,
 } from './responseValidator';
 import {
+  enforceBreakdownDimensionClarification,
   enforceClarificationRoundLimit,
   sessionStore,
   type SessionStore,
@@ -734,11 +735,17 @@ export async function runQuestionPipeline(
       return { userTurn, assistantTurn, sessionState: nextSession };
     }
 
-    // 4. Deterministic Round-3 Clarification Limit Check
+    // 4. Deterministic Clarification Policy & Round-3 Clarification Limit Check
     const roundCheckStart = performance.now();
+    const { response: postPolicyResponse } =
+      enforceBreakdownDimensionClarification(
+        initialModelOutcome.response,
+        guardRes.sanitizedQuestion,
+        pendingClarification
+      );
     const { response: postRoundResponse, convertedFromClarify } =
       enforceClarificationRoundLimit(
-        initialModelOutcome.response,
+        postPolicyResponse,
         clarificationRound
       );
     const roundCheckDur = Math.max(

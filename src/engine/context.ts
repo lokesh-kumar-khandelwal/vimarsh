@@ -162,8 +162,8 @@ export const GLOSSARY: GlossaryEntry[] = [
     term: 'DATE BASIS (2): Revenue Default',
     category: 'date_rule',
     definition:
-      'Revenue questions with no status or timing word default to filtering/grouping by orders.created_at.',
-    formulaOrRule: 'Default date column for revenue: orders.created_at',
+      'Revenue questions with no status or timing word default their date filter to orders.created_at. This never supplies a missing breakdown or GROUP BY dimension (which requires A7 clarification).',
+    formulaOrRule: 'Default date filter column for revenue: orders.created_at',
   },
   {
     term: 'DATE BASIS (3): Return Timing',
