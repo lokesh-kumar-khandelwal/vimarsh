@@ -5,19 +5,24 @@ import {
   BookOpen,
   Calendar,
   CheckCircle2,
+  Database,
   FlaskConical,
+  History,
   KeyRound,
+  Menu,
   MessageSquareText,
   RefreshCw,
   ShieldCheck,
   Terminal,
   Wrench,
+  X,
 } from 'lucide-react';
 import { GEMINI_MODEL, SQL_JS_VERSION } from './config';
 import { ByokPanel } from './components/ByokPanel';
 import {
   ClarificationEngineWorkspace,
   EngineDiagnosticsPanel,
+  PRIMARY_EXAMPLE_QUESTIONS,
 } from './components/ClarificationEngineWorkspace';
 import { ContextInspector } from './components/ContextInspector';
 import { EvaluationPanel } from './components/EvaluationPanel';
@@ -27,6 +32,7 @@ import { ValidatorPlayground } from './components/ValidatorPlayground';
 import { dbClient } from './engine/dbClient';
 import { GOLDEN_TEST_SUITE } from './engine/goldenTests';
 import { getConnectionState, subscribeKeyStore } from './engine/keyStore';
+import { getQueryHistory, subscribeQueryHistory } from './engine/queryHistory';
 import { PROMPT_VERSION } from './engine/systemPrompt';
 import {
   runExecutorAndDryRunTestCases,
@@ -67,6 +73,23 @@ export function App() {
   const [workspaceArea, setWorkspaceArea] = useState<WorkspaceArea>('ask');
   const [devToolTab, setDevToolTab] = useState<DevToolTab>('evaluation');
   const [showDevKeyBanner, setShowDevKeyBanner] = useState<boolean>(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
+  const [historyCount, setHistoryCount] = useState<number>(() =>
+    getQueryHistory().length
+  );
+  const [askExternalAction, setAskExternalAction] = useState<{
+    type: 'focus_ask' | 'toggle_history' | 'toggle_schema' | 'select_example';
+    payload?: string;
+    seq: number;
+  } | null>(null);
+
+  useEffect(() => {
+    document.documentElement.classList.add('dark');
+  }, []);
+
+  useEffect(() => {
+    return subscribeQueryHistory((items) => setHistoryCount(items.length));
+  }, []);
 
   const [connectionState, setConnectionState] = useState<ByokConnectionState>(
     () => getConnectionState()
@@ -209,7 +232,7 @@ export function App() {
         return;
       }
       const keySection = document.querySelector(
-        '[aria-label="Gemini API Key Connection"]'
+        '[aria-label="Gemini API Key Connection Status"]'
       );
       if (keySection instanceof HTMLElement) {
         keySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -219,315 +242,489 @@ export function App() {
     }
   };
 
+  const triggerAskAction = (
+    type: 'focus_ask' | 'toggle_history' | 'toggle_schema' | 'select_example',
+    payload?: string
+  ) => {
+    setWorkspaceArea('ask');
+    setIsMobileNavOpen(false);
+    setAskExternalAction((prev) => ({
+      type,
+      payload,
+      seq: (prev?.seq ?? 0) + 1,
+    }));
+  };
+
+  const selectDevTool = (tab: DevToolTab) => {
+    setWorkspaceArea('devtools');
+    setDevToolTab(tab);
+    setIsMobileNavOpen(false);
+  };
+
+  const totalTestsCount = testResults.length;
   const passedTestsCount = testResults.filter((t) => t.passed).length;
   const allTestsPassed =
-    testResults.length > 0 && passedTestsCount === testResults.length;
+    totalTestsCount > 0 && passedTestsCount === totalTestsCount;
+  const selfTestCountLabel = isLoading
+    ? '...'
+    : totalTestsCount === 0
+      ? 'UNRUN'
+      : `${passedTestsCount}/${totalTestsCount}`;
+
+  const renderSidebarContent = () => (
+    <div className="flex flex-col justify-between h-full gap-6">
+      <div className="space-y-6">
+        {workspaceArea === 'devtools' ? (
+          <nav aria-label="Developer Tools Sections" className="space-y-1.5">
+            <div className="label-mono mb-3">[01] NAVIGATION</div>
+
+            <button
+              type="button"
+              onClick={() => selectDevTool('evaluation')}
+              className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                devToolTab === 'evaluation'
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                  : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+              }`}
+            >
+              <span>EVALUATION ({GOLDEN_TEST_SUITE.length})</span>
+              <FlaskConical className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectDevTool('playground')}
+              className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                devToolTab === 'playground'
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                  : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+              }`}
+            >
+              <span>VALIDATOR PLAYGROUND</span>
+              <ShieldCheck className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectDevTool('selftests')}
+              className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                devToolTab === 'selftests'
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                  : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+              }`}
+            >
+              <span>SELF-TESTS ({selfTestCountLabel})</span>
+              <Terminal className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectDevTool('context')}
+              className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                devToolTab === 'context'
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                  : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+              }`}
+            >
+              <span>DATE HELPERS</span>
+              <Calendar className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectDevTool('schema')}
+              className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                devToolTab === 'schema'
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                  : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+              }`}
+            >
+              <span>SCHEMA &amp; RESET DB</span>
+              <BookOpen className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectDevTool('diagnostics')}
+              className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                devToolTab === 'diagnostics'
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                  : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+              }`}
+            >
+              <span>DIAGNOSTICS</span>
+              <Activity className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            </button>
+          </nav>
+        ) : (
+          <>
+            <nav aria-label="Ask Data Workspace Sections" className="space-y-1.5">
+              <div className="label-mono mb-3">[01] NAVIGATION</div>
+
+              <button
+                type="button"
+                onClick={() => triggerAskAction('focus_ask')}
+                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold flex items-center justify-between gap-2 cursor-pointer"
+              >
+                <span>ASK WORKSPACE</span>
+                <MessageSquareText className="w-3.5 h-3.5 shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => triggerAskAction('toggle_history')}
+                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
+              >
+                <span>QUERY HISTORY ({historyCount})</span>
+                <History className="w-3.5 h-3.5 shrink-0 opacity-75" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => triggerAskAction('toggle_schema')}
+                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
+              >
+                <span>
+                  DATA REFERENCE ({schemaContext?.tables.length ?? 5})
+                </span>
+                <Database className="w-3.5 h-3.5 shrink-0 opacity-75" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => selectDevTool('evaluation')}
+                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
+              >
+                <span>EVALUATION ({GOLDEN_TEST_SUITE.length})</span>
+                <FlaskConical className="w-3.5 h-3.5 shrink-0 opacity-75" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => selectDevTool('selftests')}
+                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
+              >
+                <span>SELF-TESTS ({selfTestCountLabel})</span>
+                <Terminal className="w-3.5 h-3.5 shrink-0 opacity-75" />
+              </button>
+            </nav>
+
+            <div className="space-y-2 pt-2 border-t border-[#e4e4e7]/15">
+              <div className="label-mono">[02] SAMPLE QUERIES</div>
+              <div className="space-y-1.5">
+                {PRIMARY_EXAMPLE_QUESTIONS.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => triggerAskAction('select_example', q)}
+                    className="w-full text-left p-2.5 text-[11px] font-mono text-[#e4e4e7]/70 hover:text-[#38bdf8] hover:border-[#38bdf8] border border-[#e4e4e7]/15 bg-[#121216] rounded-none transition-colors leading-snug cursor-pointer"
+                  >
+                    &ldquo;{q}&rdquo;
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Bottom Database & Runtime Status Block */}
+      <div className="pt-4 border-t border-[#e4e4e7]/15 space-y-2">
+        <div className="label-mono">DATABASE STATUS</div>
+        <div className="space-y-1 font-mono text-xs text-[#e4e4e7]">
+          <div>sql.js: {SQL_JS_VERSION}</div>
+          <div className="truncate" title={GEMINI_MODEL}>
+            Model: {GEMINI_MODEL}
+          </div>
+          <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
+            {isLoading ? (
+              <span className="text-[#38bdf8]">Self-Tests: Running...</span>
+            ) : totalTestsCount === 0 ? (
+              <span className="text-[#e4e4e7]/60">Self-Tests: 0/0 Unrun</span>
+            ) : allTestsPassed ? (
+              <span className="inline-flex items-center gap-1 text-[#4ade80]">
+                <CheckCircle2 className="w-3 h-3 shrink-0" />
+                <span>
+                  {passedTestsCount}/{totalTestsCount} Self-Tests Passing
+                </span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[#f87171]">
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                <span>
+                  {passedTestsCount}/{totalTestsCount} Passing
+                </span>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div
       id="top"
-      className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans"
+      className="min-h-screen md:h-screen md:overflow-hidden grid grid-rows-[auto_1fr_auto] bg-[#0c0c0e] text-[#e4e4e7] font-sans selection:bg-[#38bdf8] selection:text-[#0c0c0e]"
     >
-      {/* Top Bar: 3 zones (Brand wordmark | Ask Data vs Developer Tools | API Key status/action) */}
-      <header className="h-14 flex items-center justify-between gap-4 px-4 sm:px-6 border-b border-slate-800/90 bg-slate-950/95 sticky top-0 z-20 backdrop-blur-xs">
-        <button
-          type="button"
-          onClick={() => setWorkspaceArea('ask')}
-          className="flex items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs shrink-0"
-        >
-          <span className="text-base font-bold tracking-tight text-slate-100">
-            Vimarsh
-          </span>
-          <span className="hidden sm:inline-block text-xs text-slate-400 font-normal">
-            Text-to-SQL Clarification Engine
-          </span>
-        </button>
-
-        <nav
-          aria-label="Main Navigation"
-          className="flex items-center gap-2 sm:gap-4 text-xs font-medium"
-        >
+      {/* Top Bar: Variation 2 layout (Brand System v6.3 | ASK DATA / DEVELOPER TOOLS | API Key Status) */}
+      <header className="border-b-2 border-[#e4e4e7] px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4 bg-[#0c0c0e] z-30">
+        <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setWorkspaceArea('ask')}
-            aria-current={workspaceArea === 'ask' ? 'page' : undefined}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-sky-400 ${
-              workspaceArea === 'ask'
-                ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30 font-semibold'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
+            onClick={() => setIsMobileNavOpen((prev) => !prev)}
+            aria-expanded={isMobileNavOpen}
+            aria-label="Toggle navigation menu"
+            className="md:hidden p-2 rounded-none border border-[#e4e4e7]/35 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] cursor-pointer"
           >
-            <MessageSquareText className="w-3.5 h-3.5" />
-            <span>Ask Data</span>
+            {isMobileNavOpen ? (
+              <X className="w-4 h-4" />
+            ) : (
+              <Menu className="w-4 h-4" />
+            )}
           </button>
 
           <button
             type="button"
-            onClick={() => setWorkspaceArea('devtools')}
-            aria-current={workspaceArea === 'devtools' ? 'page' : undefined}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-sky-400 ${
-              workspaceArea === 'devtools'
-                ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30 font-semibold'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
+            onClick={() => {
+              setWorkspaceArea('ask');
+              setIsMobileNavOpen(false);
+            }}
+            className="flex items-center gap-3 text-left rounded-none shrink-0 group cursor-pointer"
           >
-            <Wrench className="w-3.5 h-3.5" />
-            <span>Developer Tools</span>
+            <div>
+              <span className="label-mono block leading-none mb-1">
+                SYSTEM v6.3
+              </span>
+              <span className="font-syne font-extrabold text-xl sm:text-2xl tracking-tight text-[#e4e4e7] group-hover:text-[#38bdf8] transition-colors">
+                VIMARSH
+              </span>
+            </div>
           </button>
-        </nav>
+        </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-4 sm:gap-8">
+          <nav
+            aria-label="Main Navigation"
+            className="flex items-center gap-4 sm:gap-6 font-mono text-xs uppercase tracking-wider"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setWorkspaceArea('ask');
+                setIsMobileNavOpen(false);
+              }}
+              aria-current={workspaceArea === 'ask' ? 'page' : undefined}
+              className={`inline-flex items-center gap-1.5 py-1 transition-colors whitespace-nowrap cursor-pointer ${
+                workspaceArea === 'ask'
+                  ? 'text-[#38bdf8] font-bold border-b-2 border-[#38bdf8]'
+                  : 'text-[#e4e4e7]/65 hover:text-[#e4e4e7]'
+              }`}
+            >
+              <MessageSquareText className="w-3.5 h-3.5 hidden sm:inline" />
+              <span>Ask Data</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setWorkspaceArea('devtools');
+                setIsMobileNavOpen(false);
+              }}
+              aria-current={workspaceArea === 'devtools' ? 'page' : undefined}
+              className={`inline-flex items-center gap-1.5 py-1 transition-colors whitespace-nowrap cursor-pointer ${
+                workspaceArea === 'devtools'
+                  ? 'text-[#38bdf8] font-bold border-b-2 border-[#38bdf8]'
+                  : 'text-[#e4e4e7]/65 hover:text-[#e4e4e7]'
+              }`}
+            >
+              <Wrench className="w-3.5 h-3.5 hidden sm:inline" />
+              <span>Developer Tools</span>
+            </button>
+          </nav>
+
           <button
             type="button"
             onClick={handleTopBarKeyAction}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider rounded-none transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               connectionState.status === 'connected'
-                ? 'border-emerald-800/70 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-900/40'
-                : 'border-sky-600/60 bg-sky-600/15 text-sky-200 hover:bg-sky-600/25'
+                ? 'bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8]'
+                : 'border border-[#e4e4e7] bg-[#121216] text-[#e4e4e7] hover:bg-[#e4e4e7] hover:text-[#0c0c0e]'
             }`}
           >
             <KeyRound className="w-3.5 h-3.5" />
             <span>
               {connectionState.status === 'connected'
-                ? `Key ••••${connectionState.last4}`
+                ? `KEY ••••${connectionState.last4}`
                 : 'Connect API Key'}
             </span>
           </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-        {/* Database Worker Initialization Error */}
-        {errorMessage && (
-          <section
-            role="alert"
-            aria-label="Database Initialization Error"
-            className="rounded-xl border border-rose-800 bg-rose-950/40 p-5 space-y-3"
+      {/* Main Middle Shell: Left Sidebar + Scrollable Main Workspace */}
+      <div className="min-h-0 grid grid-cols-1 md:grid-cols-[220px_1fr] lg:grid-cols-[260px_1fr] md:overflow-hidden relative">
+        {/* Desktop & Tablet Left Sidebar */}
+        <aside
+          aria-label="Workspace Navigation and Database Status"
+          className="hidden md:flex md:flex-col justify-between border-r border-[#e4e4e7]/15 bg-[#0c0c0e] p-5 overflow-y-auto"
+        >
+          {renderSidebarContent()}
+        </aside>
+
+        {/* Mobile Collapsible Navigation Drawer */}
+        {isMobileNavOpen && (
+          <aside
+            aria-label="Mobile Navigation Drawer"
+            className="md:hidden border-b-2 border-[#e4e4e7] bg-[#121216] p-4 z-20"
           >
-            <div className="flex items-center gap-2 text-rose-300 font-semibold text-sm">
-              <AlertTriangle className="w-5 h-5 shrink-0" />
-              <span>Database Worker Initialization Failed</span>
-            </div>
-            <p className="text-xs text-rose-200/90 font-mono break-words">
-              {errorMessage}
-            </p>
-            <p className="text-xs text-slate-300">
-              Query execution remains disabled when the SQLite Web Worker cannot
-              be initialized. No main-thread fallback is used.
-            </p>
-            <button
-              type="button"
-              onClick={() => void initializeOrResetWorker(false)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg bg-rose-800 text-white hover:bg-rose-700 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+            {renderSidebarContent()}
+          </aside>
+        )}
+
+        {/* Scrollable Primary Workspace */}
+        <main className="min-h-0 md:overflow-y-auto overscroll-contain p-4 sm:p-8 lg:p-10 space-y-6">
+          {/* Database Worker Initialization Error */}
+          {errorMessage && (
+            <section
+              role="alert"
+              aria-label="Database Initialization Error"
+              className="rounded-none border border-[#f87171] bg-[#f87171]/10 p-5 space-y-3"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Retry Worker Initialization</span>
-            </button>
-          </section>
-        )}
-
-        {workspaceArea === 'ask' ? (
-          <ClarificationEngineWorkspace
-            schemaContext={schemaContext}
-            dbClient={dbClient}
-            connectionState={connectionState}
-            onConnectionStateChange={setConnectionState}
-            isLoadingDb={isLoading}
-            onResetDatabase={() => void initializeOrResetWorker(true)}
-          />
-        ) : (
-          <div className="space-y-6">
-            {/* Developer Tools Header, Stage 4 Banner, Self-Test Status & Version Diagnostics */}
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h1 className="text-xl font-bold text-slate-100 tracking-tight">
-                    Developer Tools &amp; Verification Suite
-                  </h1>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Stage 4: Full Clarification Chat UI, Auto-Chart, 32
-                    Date-Proof Golden Tests, Multiset Comparator &amp;
-                    Evaluation Metrics
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                  {!errorMessage && testResults.length > 0 && (
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono tabular-nums border ${
-                        allTestsPassed
-                          ? 'border-emerald-800/60 bg-emerald-950/30 text-emerald-300'
-                          : 'border-rose-800/60 bg-rose-950/30 text-rose-300'
-                      }`}
-                    >
-                      {allTestsPassed ? (
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                      ) : (
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                      )}
-                      <span>
-                        {passedTestsCount}/{testResults.length} Self-Tests
-                        Passing
-                      </span>
-                    </span>
-                  )}
-                </div>
+              <div className="flex items-center gap-2 text-[#f87171] font-mono font-bold uppercase text-sm">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <span>Database Worker Initialization Failed</span>
               </div>
-
-              {/* Developer Runtime Version Metadata */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/60 text-[11px] font-mono text-slate-400 tabular-nums">
-                <span>
-                  PROMPT_VERSION: <strong className="text-slate-200">{PROMPT_VERSION}</strong>
-                </span>
-                <span>
-                  MODEL: <strong className="text-slate-200">{GEMINI_MODEL}</strong>
-                </span>
-                <span>
-                  sql.js: <strong className="text-slate-200">{SQL_JS_VERSION}</strong>
-                </span>
-              </div>
-
-              {/* Developer Tools Sub-Navigation */}
-              <nav
-                aria-label="Developer Tools Sections"
-                className="flex flex-wrap items-center gap-1.5 pt-3 border-t border-slate-800/80"
+              <p className="text-xs text-[#f87171] font-mono break-words">
+                {errorMessage}
+              </p>
+              <p className="text-xs text-[#e4e4e7]/70">
+                Query execution remains disabled when the SQLite Web Worker cannot
+                be initialized. No main-thread fallback is used.
+              </p>
+              <button
+                type="button"
+                onClick={() => void initializeOrResetWorker(false)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] transition-colors cursor-pointer"
               >
-                <button
-                  type="button"
-                  onClick={() => setDevToolTab('evaluation')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'evaluation'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <FlaskConical className="w-3.5 h-3.5" />
-                  <span>Evaluation ({GOLDEN_TEST_SUITE.length})</span>
-                </button>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry Worker Initialization</span>
+              </button>
+            </section>
+          )}
 
-                <button
-                  type="button"
-                  onClick={() => setDevToolTab('playground')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'playground'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Validator Playground</span>
-                </button>
+          {workspaceArea === 'ask' ? (
+            <ClarificationEngineWorkspace
+              schemaContext={schemaContext}
+              dbClient={dbClient}
+              connectionState={connectionState}
+              onConnectionStateChange={setConnectionState}
+              isLoadingDb={isLoading}
+              onResetDatabase={() => void initializeOrResetWorker(true)}
+              externalAction={askExternalAction}
+            />
+          ) : (
+            <div className="max-w-5xl mx-auto w-full space-y-6">
+              {/* Optional API Key connection panel inside Developer Tools when toggled or needed for Evaluation */}
+              {(showDevKeyBanner ||
+                (devToolTab === 'evaluation' &&
+                  connectionState.status !== 'connected')) && (
+                <ByokPanel
+                  connectionState={connectionState}
+                  onStateChange={setConnectionState}
+                  compact
+                />
+              )}
 
-                <button
-                  type="button"
-                  onClick={() => setDevToolTab('selftests')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'selftests'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <Terminal className="w-3.5 h-3.5" />
-                  <span>
-                    Self-Tests ({passedTestsCount}/{testResults.length})
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setDevToolTab('context')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'context'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>Date Helpers &amp; Context</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setDevToolTab('schema')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'schema'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  <span>Data Reference &amp; Reset DB</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setDevToolTab('diagnostics')}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 ${
-                    devToolTab === 'diagnostics'
-                      ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`}
-                >
-                  <Activity className="w-3.5 h-3.5" />
-                  <span>Diagnostics &amp; Security Prompts</span>
-                </button>
-              </nav>
+              {/* Active Developer Tool View */}
+              {devToolTab === 'evaluation' ? (
+                <EvaluationPanel
+                  schemaContext={schemaContext}
+                  dbClient={dbClient}
+                  connectionState={connectionState}
+                  selfTestPassedCount={passedTestsCount}
+                  selfTestTotalCount={totalTestsCount}
+                  isLoadingSelfTests={isLoading}
+                  onOpenSelfTests={() => selectDevTool('selftests')}
+                />
+              ) : devToolTab === 'playground' ? (
+                <ValidatorPlayground
+                  schemaContext={schemaContext}
+                  dbClient={dbClient}
+                />
+              ) : devToolTab === 'selftests' ? (
+                <SelfTestsPanel
+                  seedReport={seedReport}
+                  testResults={testResults}
+                  isRunning={isLoading}
+                  onRerunTests={() => void handleRerunSelfTests()}
+                />
+              ) : devToolTab === 'context' ? (
+                <ContextInspector
+                  schemaContext={schemaContext}
+                  seedReport={seedReport}
+                />
+              ) : devToolTab === 'schema' ? (
+                <Sidebar
+                  schemaContext={schemaContext}
+                  isLoading={isLoading}
+                  onResetDatabase={() => void initializeOrResetWorker(true)}
+                  showResetControl={true}
+                />
+              ) : (
+                <EngineDiagnosticsPanel
+                  schemaContext={schemaContext}
+                  dbClient={dbClient}
+                  connectionState={connectionState}
+                  onOpenInAskWorkspace={() => setWorkspaceArea('ask')}
+                />
+              )}
             </div>
+          )}
+        </main>
+      </div>
 
-            {/* Optional API Key connection panel inside Developer Tools when toggled or needed for Evaluation */}
-            {(showDevKeyBanner ||
-              (devToolTab === 'evaluation' &&
-                connectionState.status !== 'connected')) && (
-              <ByokPanel
-                connectionState={connectionState}
-                onStateChange={setConnectionState}
-                compact
-              />
-            )}
+      {/* Bottom Technical Status Footer */}
+      <footer className="border-t border-[#e4e4e7]/15 px-4 sm:px-8 py-2 bg-[#0c0c0e] flex flex-wrap items-center justify-between gap-3 text-[10px] font-mono uppercase tracking-widest text-[#e4e4e7]/60 z-20">
+        <div className="flex flex-wrap items-center gap-3">
+          <span>PROMPT: {PROMPT_VERSION.toUpperCase()}</span>
+          <span aria-hidden="true" className="text-[#e4e4e7]/25">
+            ·
+          </span>
+          <span>SQL.JS: {SQL_JS_VERSION}</span>
+          <span aria-hidden="true" className="text-[#e4e4e7]/25">
+            ·
+          </span>
+          <span>MODEL: {GEMINI_MODEL}</span>
+        </div>
 
-            {/* Active Developer Tool View */}
-            {devToolTab === 'evaluation' ? (
-              <EvaluationPanel
-                schemaContext={schemaContext}
-                dbClient={dbClient}
-                connectionState={connectionState}
-              />
-            ) : devToolTab === 'playground' ? (
-              <ValidatorPlayground
-                schemaContext={schemaContext}
-                dbClient={dbClient}
-              />
-            ) : devToolTab === 'selftests' ? (
-              <SelfTestsPanel
-                seedReport={seedReport}
-                testResults={testResults}
-                isRunning={isLoading}
-                onRerunTests={() => void handleRerunSelfTests()}
-              />
-            ) : devToolTab === 'context' ? (
-              <ContextInspector
-                schemaContext={schemaContext}
-                seedReport={seedReport}
-              />
-            ) : devToolTab === 'schema' ? (
-              <Sidebar
-                schemaContext={schemaContext}
-                isLoading={isLoading}
-                onResetDatabase={() => void initializeOrResetWorker(true)}
-                showResetControl={true}
-              />
-            ) : (
-              <EngineDiagnosticsPanel
-                schemaContext={schemaContext}
-                dbClient={dbClient}
-                connectionState={connectionState}
-                onOpenInAskWorkspace={() => setWorkspaceArea('ask')}
-              />
-            )}
-          </div>
-        )}
-      </main>
+        <div className="flex flex-wrap items-center gap-4 tabular-nums">
+          <span
+            className={
+              isLoading
+                ? 'text-[#38bdf8]'
+                : totalTestsCount === 0
+                  ? 'text-[#e4e4e7]/50'
+                  : allTestsPassed
+                    ? 'text-[#4ade80]'
+                    : 'text-[#f87171]'
+            }
+          >
+            SELF-TESTS:{' '}
+            {isLoading
+              ? 'RUNNING...'
+              : totalTestsCount === 0
+                ? '0/0 UNRUN'
+                : `${passedTestsCount}/${totalTestsCount} PASSING`}
+          </span>
+          <span aria-hidden="true" className="text-[#e4e4e7]/25">
+            ·
+          </span>
+          <span className="text-[#e4e4e7]/75">
+            GOLDEN SUITE: {GOLDEN_TEST_SUITE.length} CASES
+          </span>
+        </div>
+      </footer>
     </div>
   );
 }

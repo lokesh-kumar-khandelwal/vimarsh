@@ -85,16 +85,21 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
       {/* Header & Safety Contract Notice */}
       <section
         aria-label="Validator Playground Controls"
-        className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 space-y-4"
+        className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 space-y-5"
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
-            <h2 className="text-base font-semibold text-slate-100">
-              SQL Safety Engine — Validator Playground (Steps 1–9 Only)
+          <div className="space-y-1.5">
+            <span className="label-mono text-[#38bdf8] block">
+              FAIL-CLOSED SQL SAFETY ENGINE
+            </span>
+            <h2 className="font-syne font-extrabold text-2xl uppercase tracking-tight text-[#e4e4e7]">
+              VALIDATOR PLAYGROUND (STEPS 1–9 ONLY)
             </h2>
-            <p className="text-xs text-slate-400">
-              Paste any SQL statement to inspect deterministic validation across AST parsing, statement &amp; projection rules, LIMIT bounds, function allowlist, schema resolution, sensitive column blocking, token filters, and Worker <code className="font-mono text-slate-300">EXPLAIN QUERY PLAN</code> dry run.{' '}
-              <strong className="text-slate-200">
+            <p className="text-xs text-[#e4e4e7]/65 leading-relaxed max-w-3xl">
+              Paste any SQL statement to inspect deterministic validation across AST parsing, statement &amp; projection rules, LIMIT bounds, function allowlist, schema resolution, sensitive column blocking, token filters, and Worker{' '}
+              <code className="font-mono text-[#38bdf8]">EXPLAIN QUERY PLAN</code>{' '}
+              dry run.{' '}
+              <strong className="text-[#e4e4e7]">
                 Step 10 (Execution) is never run on pasted SQL.
               </strong>
             </p>
@@ -102,17 +107,15 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
         </div>
 
         {/* Sample Preset Buttons */}
-        <div className="space-y-1.5">
-          <div className="text-xs font-medium text-slate-400">
-            Load Preset Test Query:
-          </div>
+        <div className="space-y-2">
+          <div className="label-mono">LOAD PRESET TEST QUERY:</div>
           <div className="flex flex-wrap gap-2">
             {SAMPLE_QUERIES.map((sample) => (
               <button
                 key={sample.label}
                 type="button"
                 onClick={() => handleSelectSample(sample.sql)}
-                className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+                className="px-2.5 py-1.5 text-[11px] font-mono rounded-none border border-[#e4e4e7]/25 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 {sample.label}
               </button>
@@ -124,7 +127,7 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
         <div className="space-y-2">
           <label
             htmlFor="validator-sql-input"
-            className="block text-xs font-medium text-slate-300"
+            className="block text-xs font-mono font-bold uppercase tracking-wider text-[#e4e4e7]"
           >
             SQL Statement to Validate (No LLM, Zero Execution)
           </label>
@@ -140,19 +143,19 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
               }
             }}
             placeholder="Paste any SQL statement here..."
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3.5 font-mono text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-400 focus:outline-none leading-relaxed"
+            className="w-full rounded-none border border-[#e4e4e7]/30 bg-[#0c0c0e] p-3.5 font-mono text-xs text-[#38bdf8] placeholder:text-[#e4e4e7]/35 focus:border-[#38bdf8] leading-relaxed"
           />
         </div>
 
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-[11px] text-slate-400">
-            Tip: Press <kbd className="font-mono text-slate-300">Ctrl+Enter</kbd> or click Validate SQL to run Steps 1–9.
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <span className="text-[11px] font-mono text-[#e4e4e7]/60">
+            Tip: Press <kbd className="font-mono text-[#e4e4e7]">Ctrl+Enter</kbd> or click Validate SQL to run Steps 1–9.
           </span>
           <button
             type="button"
             onClick={() => void handleValidate()}
             disabled={!schemaContext || isValidating}
-            className="inline-flex items-center gap-2 py-2 px-4 text-xs font-semibold rounded-lg bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-300"
+            className="inline-flex items-center gap-2 py-2 px-4 text-xs font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
             <span>
@@ -166,28 +169,28 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
       {result && (
         <section
           aria-label="Validation Verdict and Step Trace"
-          className="rounded-xl border border-slate-800 bg-slate-900/70 overflow-hidden"
+          className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] overflow-hidden"
         >
           {/* Verdict Banner */}
           <div
             className={`p-5 border-b ${
               result.valid
-                ? 'border-emerald-800/60 bg-emerald-950/30'
-                : 'border-rose-800/60 bg-rose-950/30'
+                ? 'border-[#4ade80]/50 bg-[#4ade80]/[0.06] text-[#4ade80]'
+                : 'border-[#f87171]/50 bg-[#f87171]/[0.06] text-[#f87171]'
             }`}
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">
                 {result.valid ? (
-                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <ShieldCheck className="w-5 h-5 text-[#4ade80] shrink-0 mt-0.5" />
                 ) : (
-                  <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                  <ShieldAlert className="w-5 h-5 text-[#f87171] shrink-0 mt-0.5" />
                 )}
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`font-mono text-sm font-bold ${
-                        result.valid ? 'text-emerald-300' : 'text-rose-300'
+                      className={`font-mono text-sm font-bold uppercase ${
+                        result.valid ? 'text-[#4ade80]' : 'text-[#f87171]'
                       }`}
                     >
                       {result.valid
@@ -195,7 +198,7 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
                         : `REJECTED — Failed at Step ${result.failedStep}`}
                     </span>
                   </div>
-                  <p className="text-xs font-mono text-slate-200 break-words">
+                  <p className="text-xs font-mono text-[#e4e4e7] break-words">
                     {result.valid
                       ? `Statement passed static AST validation and SQLite EXPLAIN QUERY PLAN dry run (${result.dryRunDurationMs ?? 0} ms). Step 10 execution was skipped per Playground safety policy.`
                       : result.error}
@@ -204,7 +207,7 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
               </div>
 
               {result.valid && (
-                <div className="flex items-center gap-4 text-xs font-mono text-slate-300 tabular-nums shrink-0">
+                <div className="flex items-center gap-4 text-xs font-mono text-[#38bdf8] tabular-nums shrink-0">
                   <span>
                     Tables: {result.tablesUsed.join(', ') || 'none'}
                   </span>
@@ -219,56 +222,56 @@ export const ValidatorPlayground: React.FC<ValidatorPlaygroundProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-800 text-[11px] font-medium text-slate-400 bg-slate-950/50">
-                  <th className="py-2.5 px-4 w-28">Status</th>
-                  <th className="py-2.5 px-4 w-88">Safety Engine Step</th>
-                  <th className="py-2.5 px-4">Step Outcome &amp; Reason</th>
+                <tr className="border-b border-[#e4e4e7]/15 text-[10px] font-mono uppercase tracking-widest text-[#e4e4e7]/60 bg-[#121216]">
+                  <th className="py-2.5 px-4 w-28">STATUS</th>
+                  <th className="py-2.5 px-4 w-88">SAFETY ENGINE STEP</th>
+                  <th className="py-2.5 px-4">STEP OUTCOME &amp; REASON</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/70 text-xs">
+              <tbody className="divide-y divide-[#e4e4e7]/10 text-xs">
                 {result.steps.map((st) => (
                   <tr
                     key={st.step}
-                    className="hover:bg-slate-800/30 transition-colors"
+                    className="hover:bg-[#e4e4e7]/[0.03] transition-colors"
                   >
                     <td className="py-2.5 px-4 whitespace-nowrap align-top">
                       {st.status === 'passed' ? (
-                        <span className="inline-flex items-center gap-1.5 font-mono text-xs font-medium text-emerald-400">
+                        <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[#4ade80]">
                           <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                           PASS
                         </span>
                       ) : st.status === 'failed' ? (
-                        <span className="inline-flex items-center gap-1.5 font-mono text-xs font-medium text-rose-400">
+                        <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[#f87171]">
                           <XCircle className="w-3.5 h-3.5 shrink-0" />
                           REJECT
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 font-mono text-xs text-slate-500">
+                        <span className="inline-flex items-center gap-1.5 font-mono text-xs text-[#e4e4e7]/50">
                           <MinusCircle className="w-3.5 h-3.5 shrink-0" />
                           SKIPPED
                         </span>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 font-medium text-slate-200 align-top">
+                    <td className="py-2.5 px-4 font-medium text-[#e4e4e7] align-top">
                       {st.name}
                     </td>
-                    <td className="py-2.5 px-4 font-mono text-[11px] text-slate-300 align-top break-words">
+                    <td className="py-2.5 px-4 font-mono text-[11px] text-[#e4e4e7]/65 align-top break-words">
                       {st.detail}
                     </td>
                   </tr>
                 ))}
                 {/* Step 10 explicit non-execution row in Playground */}
-                <tr className="bg-slate-950/40">
+                <tr className="bg-[#121216]">
                   <td className="py-2.5 px-4 whitespace-nowrap align-top">
-                    <span className="inline-flex items-center gap-1.5 font-mono text-xs text-sky-400">
+                    <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[#fbbf24]">
                       <MinusCircle className="w-3.5 h-3.5 shrink-0" />
                       DISABLED
                     </span>
                   </td>
-                  <td className="py-2.5 px-4 font-medium text-slate-300 align-top">
+                  <td className="py-2.5 px-4 font-medium text-[#e4e4e7] align-top">
                     Step 10: Worker Query Execution
                   </td>
-                  <td className="py-2.5 px-4 font-mono text-[11px] text-slate-400 align-top">
+                  <td className="py-2.5 px-4 font-mono text-[11px] text-[#e4e4e7]/65 align-top">
                     Never executed in Validator Playground (validation-only mode runs Steps 1–9 only).
                   </td>
                 </tr>

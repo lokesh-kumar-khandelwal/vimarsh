@@ -1,10 +1,85 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-heading: "Syne", -apple-system, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root,
+.dark {
+  /* Variation 2 Dark Technical Palette */
+  --bg: #0c0c0e;
+  --bg-elevated: #121216;
+  --bg-subtle: rgba(228, 224, 231, 0.03);
+  --ink: #e4e4e7;
+  --ink-muted: rgba(228, 224, 231, 0.65);
+  --ink-faint: rgba(228, 224, 231, 0.12);
+  --accent: #38bdf8;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* Accessible keyboard focus indicator across all interactive controls */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Variation 2 Typography & Component Classes */
+.label-mono {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-muted);
+}
+
+.font-syne {
+  font-family: var(--font-heading);
+}
+
+.font-mono-code {
+  font-family: var(--font-mono);
 }
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Technical dark scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0c0c0e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(228, 224, 231, 0.2);
+  border-radius: 0px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.6);
 }

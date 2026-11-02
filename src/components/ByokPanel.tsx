@@ -101,34 +101,34 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
     return (
       <section
         aria-label="Gemini API Key Connection Status"
-        className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+        className="rounded-none border border-[#4ade80]/50 bg-[#4ade80]/[0.05] px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-[#4ade80]"
       >
-        <div className="flex flex-wrap items-center gap-2.5 text-xs">
-          <span className="inline-flex items-center gap-1.5 font-medium text-emerald-400">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>Gemini API connected</span>
+        <div className="flex flex-wrap items-center gap-2.5 text-xs font-mono">
+          <span className="inline-flex items-center gap-1.5 font-bold uppercase tracking-wider">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-[#4ade80]" />
+            <span>Gemini API Connected</span>
           </span>
-          <span className="text-slate-600" aria-hidden="true">
+          <span className="text-[#e4e4e7]/30" aria-hidden="true">
             ·
           </span>
-          <span className="font-mono text-slate-300 tabular-nums">
-            Key ending in ••••{connectionState.last4}
+          <span className="text-[#e4e4e7] font-mono tabular-nums">
+            KEY ••••{connectionState.last4}
           </span>
           {lastProbe && lastProbe.status === 'connected' && (
             <>
-              <span className="text-slate-600 hidden sm:inline" aria-hidden="true">
+              <span className="text-[#e4e4e7]/30 hidden sm:inline" aria-hidden="true">
                 ·
               </span>
-              <span className="font-mono text-slate-400 tabular-nums hidden sm:inline">
+              <span className="font-mono tabular-nums text-[#e4e4e7]/70 hidden sm:inline">
                 Verified in {lastProbe.durationMs} ms
               </span>
             </>
           )}
-          <span className="text-slate-600 hidden md:inline" aria-hidden="true">
+          <span className="text-[#e4e4e7]/30 hidden md:inline" aria-hidden="true">
             ·
           </span>
-          <span className="text-slate-400 hidden md:inline">
-            Stored in this browser tab only
+          <span className="text-[#e4e4e7]/60 hidden md:inline">
+            Tab session only
           </span>
         </div>
 
@@ -140,14 +140,14 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
               setLocalHint(null);
               setTimeout(() => inputRef.current?.focus(), 20);
             }}
-            className="px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-800 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/40 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Change Key
           </button>
           <button
             type="button"
             onClick={handleDisconnect}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#0c0c0e] text-[#e4e4e7]/75 hover:border-[#f87171] hover:text-[#f87171] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Disconnect Key</span>
@@ -160,25 +160,25 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
   return (
     <section
       aria-label="Connect Gemini API Key"
-      className={`rounded-xl border ${
+      className={`rounded-none border ${
         isServiceUnavailable
-          ? 'border-amber-700/80 bg-amber-950/20'
+          ? 'border-[#fbbf24] bg-[#fbbf24]/[0.05]'
           : hasErrorStatus
-            ? 'border-rose-800/80 bg-rose-950/20'
-            : 'border-slate-800 bg-slate-900/75'
+            ? 'border-[#f87171] bg-[#f87171]/[0.05]'
+            : 'border-[#e4e4e7]/20 bg-[#121216]'
       } ${compact ? 'p-4' : 'p-5'} space-y-3.5`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-sky-400 shrink-0" />
-            <h2 className="text-sm font-semibold text-slate-100">
+            <KeyRound className="w-4 h-4 text-[#38bdf8] shrink-0" />
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-[#e4e4e7]">
               {isConnected
                 ? 'Replace your Gemini API key'
-                : 'Connect your Gemini API key to start asking questions.'}
+                : 'Connect your Gemini API key to start asking questions'}
             </h2>
           </div>
-          <p className="text-xs text-slate-300 leading-relaxed">
+          <p className="text-xs text-[#e4e4e7]/65 leading-relaxed">
             Paste a Gemini API key from Google AI Studio to enable natural-language
             SQL generation and ambiguity checks.
           </p>
@@ -192,7 +192,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
               setKeyInput('');
               setLocalHint(null);
             }}
-            className="px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#0c0c0e] text-[#e4e4e7]/75 hover:border-[#e4e4e7] hover:text-[#e4e4e7] transition-colors cursor-pointer"
           >
             Cancel
           </button>
@@ -207,8 +207,8 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
         >
           {isConnecting ? (
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-sky-300 font-medium">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+              <span className="inline-flex items-center gap-1.5 text-[#38bdf8] font-mono">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0 text-[#38bdf8]" />
                 <span>
                   {connectionState.message ||
                     `Verifying your API key with Gemini (${Math.round(CONNECT_PROBE_TIMEOUT_MS / 1000)}s timeout)...`}
@@ -217,22 +217,24 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
               <button
                 type="button"
                 onClick={handleCancelProbe}
-                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-300 hover:text-white transition-colors"
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#f87171] hover:text-[#f87171] transition-colors cursor-pointer"
               >
                 <XCircle className="w-3.5 h-3.5" />
                 <span>Cancel</span>
               </button>
             </div>
           ) : isServiceUnavailable ? (
-            <div className="rounded-lg border border-amber-700/80 bg-amber-950/40 p-3.5 space-y-2.5">
-              <div className="flex items-start gap-2 text-amber-200 font-semibold">
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="rounded-none border border-[#fbbf24]/60 bg-[#fbbf24]/[0.06] p-3.5 space-y-2.5">
+              <div className="flex items-start gap-2 text-[#fbbf24] font-semibold">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                 <div className="space-y-1">
-                  <div>Gemini Service Temporarily Unavailable (HTTP 503)</div>
-                  <p className="text-xs font-normal text-slate-200 leading-relaxed">
+                  <div className="font-mono text-xs uppercase tracking-wider">
+                    Gemini Service Temporarily Unavailable (HTTP 503)
+                  </div>
+                  <p className="text-xs font-normal text-[#e4e4e7]/80 leading-relaxed">
                     {connectionState.message}
                   </p>
-                  <p className="text-[11px] font-normal text-slate-300 leading-relaxed">
+                  <p className="text-[11px] font-normal text-[#e4e4e7]/60 leading-relaxed">
                     Your key remains in the input field below — you can retry
                     verification immediately without reloading the application.
                   </p>
@@ -243,7 +245,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
                   type="button"
                   disabled={isConnecting || keyInput.trim().length === 0}
                   onClick={() => void runVerification()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-400 text-slate-950 hover:bg-amber-300 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-50 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Retry Verification</span>
@@ -252,8 +254,8 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
             </div>
           ) : hasErrorStatus ? (
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-rose-300 font-medium">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span className="inline-flex items-center gap-1.5 text-[#f87171] font-mono">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
                 <span>{connectionState.message}</span>
               </span>
               {keyInput.trim().length > 0 && (
@@ -261,7 +263,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
                   type="button"
                   disabled={isConnecting}
                   onClick={() => void runVerification()}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-rose-700/80 bg-rose-900/40 text-rose-100 hover:bg-rose-800/50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#f87171] bg-[#f87171]/10 text-[#f87171] hover:bg-[#f87171] hover:text-[#0c0c0e] transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-3 h-3" />
                   <span>Retry</span>
@@ -269,11 +271,10 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
               )}
             </div>
           ) : (
-            <span className="text-amber-300">{localHint}</span>
+            <span className="text-[#fbbf24] font-mono">{localHint}</span>
           )}
         </div>
       )}
-
 
       <form
         onSubmit={(e) => void handleConnect(e)}
@@ -296,13 +297,13 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
             autoComplete="off"
             spellCheck={false}
             disabled={isConnecting}
-            className="w-full pl-3.5 pr-9 py-2.5 text-xs font-mono rounded-lg bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-500 focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-50"
+            className="w-full pl-3.5 pr-9 py-2.5 text-xs font-mono rounded-none bg-[#0c0c0e] border border-[#e4e4e7]/30 text-[#e4e4e7] placeholder-[#e4e4e7]/40 focus:border-[#38bdf8] disabled:opacity-50"
           />
           <button
             type="button"
             onClick={() => setShowPassword((prev) => !prev)}
             aria-label={showPassword ? 'Hide API key' : 'Show API key'}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs p-0.5"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#e4e4e7]/60 hover:text-[#38bdf8] rounded-none p-0.5 cursor-pointer"
           >
             {showPassword ? (
               <EyeOff className="w-4 h-4" />
@@ -315,7 +316,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
         <button
           type="submit"
           disabled={isConnecting}
-          className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-lg bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-300"
+          className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
           {isConnecting ? (
             <>
@@ -334,9 +335,9 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
       </form>
 
       {/* Privacy & Free Key Link */}
-      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80 text-xs text-slate-400">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-[#e4e4e7]/15 text-[11px] text-[#e4e4e7]/60">
         <span className="inline-flex items-center gap-1.5">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <ShieldCheck className="w-3.5 h-3.5 text-[#4ade80] shrink-0" />
           <span>
             Kept in this tab only (memory / sessionStorage). Never saved in
             localStorage or sent to any server other than Google&apos;s Gemini API.
@@ -346,7 +347,7 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
           href="https://aistudio.google.com/apikey"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 underline whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+          className="inline-flex items-center gap-1 text-[#38bdf8] font-mono font-bold uppercase tracking-wider underline whitespace-nowrap shrink-0 hover:text-[#e4e4e7]"
         >
           <span>Get a Gemini API key</span>
           <ExternalLink className="w-3 h-3" />
@@ -355,4 +356,3 @@ export const ByokPanel: React.FC<ByokPanelProps> = ({
     </section>
   );
 };
-

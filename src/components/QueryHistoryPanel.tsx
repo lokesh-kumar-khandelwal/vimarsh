@@ -24,6 +24,7 @@ import {
   subscribeQueryHistory,
 } from '../engine/queryHistory';
 import { exportRowsToCsv, generateCsvFilename } from '../engine/csvExport';
+import { formatSql } from '../engine/sqlFormatter';
 import type {
   QueryExecutionResult,
   QueryHistoryEntry,
@@ -105,7 +106,6 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      // Fallback
       setCopiedId(null);
     }
   };
@@ -180,24 +180,24 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
   return (
     <section
       aria-label="Recent Query History"
-      className="rounded-xl border border-slate-800 bg-slate-900/90 overflow-hidden transition-all duration-200"
+      className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] overflow-hidden"
     >
       {/* Top Banner & Toggle Header */}
-      <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 bg-slate-900/95">
+      <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 border-b border-[#e4e4e7]/15 bg-[#0c0c0e]">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-sky-950/60 border border-sky-800/50 text-sky-400">
-            <History className="w-5 h-5 shrink-0" />
+          <div className="p-2 rounded-none bg-[#121216] border border-[#e4e4e7]/25 text-[#38bdf8]">
+            <History className="w-4 h-4 shrink-0" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-100">
+              <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-[#e4e4e7]">
                 Query History
               </h2>
-              <span className="text-xs text-slate-400 font-mono">
+              <span className="text-xs text-[#38bdf8] font-mono tabular-nums">
                 ({history.length} {history.length === 1 ? 'query' : 'queries'})
               </span>
             </div>
-            <p className="text-xs text-slate-400 leading-normal">
+            <p className="text-xs text-[#e4e4e7]/60 leading-normal">
               Past SQL queries executed against the SQLite database. Re-run or inspect anytime.
             </p>
           </div>
@@ -207,19 +207,19 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
           {history.length > 0 && isOpen && (
             <>
               {isConfirmingClear ? (
-                <div className="flex items-center gap-1.5 animate-fadeIn">
-                  <span className="text-xs text-rose-300">Clear all?</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-mono text-[#f87171]">Clear all?</span>
                   <button
                     type="button"
                     onClick={handleClear}
-                    className="px-2.5 py-1 text-xs font-semibold rounded-md bg-rose-600 text-white hover:bg-rose-500 transition-colors focus-visible:outline-2 focus-visible:outline-rose-400"
+                    className="px-2.5 py-1 text-[11px] font-mono font-bold uppercase tracking-wider rounded-none bg-[#f87171] text-[#0c0c0e] hover:bg-[#f87171]/90 transition-colors cursor-pointer"
                   >
                     Confirm
                   </button>
                   <button
                     type="button"
                     onClick={() => setIsConfirmingClear(false)}
-                    className="px-2 py-1 text-xs font-medium rounded-md text-slate-400 hover:text-slate-200"
+                    className="px-2 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none text-[#e4e4e7]/70 hover:text-[#e4e4e7] cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -228,7 +228,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsConfirmingClear(true)}
-                  className="px-2.5 py-1 text-xs font-medium rounded-lg text-slate-400 hover:text-rose-300 hover:bg-rose-950/30 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                  className="px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/20 text-[#e4e4e7]/70 hover:text-[#f87171] hover:border-[#f87171] transition-colors cursor-pointer"
                   title="Clear all query history"
                 >
                   Clear history
@@ -241,7 +241,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
             type="button"
             onClick={onToggleOpen}
             aria-expanded={isOpen}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/35 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
           >
             <span>{isOpen ? 'Collapse' : 'View History'}</span>
             {isOpen ? (
@@ -261,21 +261,21 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
               <label htmlFor="query-history-search" className="sr-only">
                 Filter query history
               </label>
-              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className="w-4 h-4 text-[#e4e4e7]/50 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 id="query-history-search"
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Filter by question text, SQL keywords, or table name (e.g. orders, revenue)..."
-                className="w-full pl-9 pr-8 py-2 text-xs rounded-lg bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-500 focus-visible:outline-2 focus-visible:outline-sky-400"
+                className="w-full pl-9 pr-8 py-2 text-xs font-mono rounded-none bg-[#0c0c0e] border border-[#e4e4e7]/25 text-[#e4e4e7] placeholder-[#e4e4e7]/40 focus:border-[#38bdf8]"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
                   aria-label="Clear filter search"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-0.5 rounded"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#e4e4e7]/60 hover:text-[#38bdf8] p-0.5 rounded-none cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -285,18 +285,18 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
 
           {/* Empty state */}
           {history.length === 0 ? (
-            <div className="text-center py-8 px-4 rounded-lg border border-dashed border-slate-800 bg-slate-950/40 space-y-2">
-              <Code2 className="w-8 h-8 text-slate-600 mx-auto" />
-              <p className="text-sm font-medium text-slate-300">
+            <div className="text-center py-8 px-4 rounded-none border border-dashed border-[#e4e4e7]/25 bg-[#0c0c0e] space-y-2">
+              <Code2 className="w-8 h-8 text-[#38bdf8]/70 mx-auto" />
+              <p className="text-xs font-mono font-bold uppercase tracking-wider text-[#e4e4e7]">
                 No queries executed yet
               </p>
-              <p className="text-xs text-slate-400 max-w-md mx-auto">
+              <p className="text-xs text-[#e4e4e7]/60 max-w-md mx-auto">
                 Ask a question in the box above to generate and run SQLite queries.
                 Executed queries are automatically saved here so you can re-run them with one click.
               </p>
             </div>
           ) : filteredHistory.length === 0 ? (
-            <div className="text-center py-6 px-4 text-xs text-slate-400">
+            <div className="text-center py-6 px-4 text-xs font-mono text-[#e4e4e7]/60">
               No queries match &ldquo;{searchQuery}&rdquo;. Try clearing your search filter.
             </div>
           ) : (
@@ -309,26 +309,26 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                 return (
                   <article
                     key={item.id}
-                    className="rounded-lg border border-slate-800 bg-slate-950/80 p-4 space-y-3 hover:border-slate-700 transition-colors"
+                    className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-4 space-y-3 hover:border-[#e4e4e7]/40 transition-colors"
                   >
                     {/* Item Header: User Question + Actions */}
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="space-y-1 flex-1 min-w-[200px]">
-                        <h3 className="text-xs font-semibold text-slate-200 leading-snug">
+                        <h3 className="text-xs font-semibold text-[#e4e4e7] leading-snug">
                           {item.question}
                         </h3>
 
-                        {/* Unboxed Metadata (Zero-Pill discipline) */}
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 font-mono">
+                        {/* Unboxed Metadata */}
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#e4e4e7]/60 font-mono">
                           <span>{item.rowCount} {item.rowCount === 1 ? 'row' : 'rows'}</span>
-                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span aria-hidden="true" className="text-[#e4e4e7]/30">·</span>
                           <span className="tabular-nums">{item.executionTimeMs} ms</span>
-                          <span aria-hidden="true" className="text-slate-600">·</span>
+                          <span aria-hidden="true" className="text-[#e4e4e7]/30">·</span>
                           <span>{formatRelativeTime(item.timestamp)}</span>
                           {item.tablesUsed.length > 0 && (
                             <>
-                              <span aria-hidden="true" className="text-slate-600">·</span>
-                              <span className="text-sky-400/90">
+                              <span aria-hidden="true" className="text-[#e4e4e7]/30">·</span>
+                              <span className="text-[#38bdf8] font-bold">
                                 tables: {item.tablesUsed.join(', ')}
                               </span>
                             </>
@@ -343,7 +343,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                           type="button"
                           disabled={isRunningThis}
                           onClick={() => void handleRerunSql(item)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-50 transition-colors cursor-pointer"
                           title="Execute this SQL query now in the SQLite database"
                         >
                           {isRunningThis ? (
@@ -358,7 +358,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => onLoadQuestion(item.question)}
-                          className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
                           title="Load this question into the input field to re-ask or refine"
                         >
                           <ArrowUpRight className="w-3.5 h-3.5" />
@@ -369,14 +369,14 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => void handleCopySql(item.id, item.sql)}
-                          className="p-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                          className="p-1.5 text-xs font-mono rounded-none border border-[#e4e4e7]/30 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
                           title={isCopied ? 'Copied to clipboard!' : 'Copy SQL query'}
                           aria-label="Copy SQL query"
                         >
                           {isCopied ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <Check className="w-3.5 h-3.5 text-[#4ade80]" />
                           ) : (
-                            <Copy className="w-3.5 h-3.5" />
+                            <Copy className="w-3.5 h-3.5 text-[#e4e4e7]/70" />
                           )}
                         </button>
 
@@ -384,7 +384,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => removeQueryHistoryEntry(item.id)}
-                          className="p-1.5 text-xs font-medium rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/30 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                          className="p-1.5 text-xs font-mono rounded-none border border-transparent text-[#e4e4e7]/60 hover:text-[#f87171] hover:border-[#f87171]/40 transition-colors cursor-pointer"
                           title="Remove from history"
                           aria-label="Remove from history"
                         >
@@ -394,19 +394,19 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                     </div>
 
                     {/* SQL Code Block */}
-                    <div className="rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-sky-200 overflow-x-auto whitespace-pre-wrap break-words leading-relaxed">
-                      {item.sql}
+                    <div className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-3 font-mono text-xs text-[#38bdf8] overflow-x-auto whitespace-pre-wrap break-words leading-relaxed tab-size-2">
+                      {formatSql(item.sql)}
                     </div>
 
                     {/* Live Re-run Results Viewer */}
                     {live && (
-                      <div className="rounded-lg border border-sky-900/60 bg-slate-900/90 p-3.5 space-y-3 animate-fadeIn">
+                      <div className="rounded-none border border-[#38bdf8]/40 bg-[#121216] p-3.5 space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <div className="flex items-center gap-2 font-medium text-slate-200">
-                            <Database className="w-3.5 h-3.5 text-sky-400" />
+                          <div className="flex items-center gap-2 font-mono font-bold uppercase tracking-wider text-[#e4e4e7]">
+                            <Database className="w-3.5 h-3.5 text-[#38bdf8]" />
                             <span>Live Execution Result</span>
                             {live.result && (
-                              <span className="text-slate-400 font-mono text-[11px] tabular-nums">
+                              <span className="text-[#4ade80] font-mono text-[11px] tabular-nums">
                                 ({live.result.rowCount} rows · {live.result.executionTimeMs} ms)
                               </span>
                             )}
@@ -423,7 +423,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                                     generateCsvFilename(item.question)
                                   )
                                 }
-                                className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-medium underline"
+                                className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-wider text-[#38bdf8] hover:underline cursor-pointer"
                               >
                                 <Download className="w-3 h-3" />
                                 <span>Export CSV</span>
@@ -439,7 +439,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                                   return copy;
                                 })
                               }
-                              className="text-slate-400 hover:text-slate-200 p-0.5 rounded"
+                              className="text-[#e4e4e7]/60 hover:text-[#e4e4e7] p-0.5 rounded-none cursor-pointer"
                               title="Close live results"
                               aria-label="Close live results"
                             >
@@ -449,51 +449,51 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
                         </div>
 
                         {live.error ? (
-                          <div className="p-2.5 rounded bg-rose-950/40 border border-rose-800/60 text-xs text-rose-300">
+                          <div className="p-2.5 rounded-none bg-[#f87171]/10 border border-[#f87171] text-xs font-mono text-[#f87171]">
                             Error executing query: {live.error}
                           </div>
                         ) : live.result?.isEmpty ? (
-                          <div className="p-2.5 rounded bg-slate-950 text-xs text-slate-400">
+                          <div className="p-2.5 rounded-none bg-[#0c0c0e] border border-[#e4e4e7]/20 text-xs font-mono text-[#e4e4e7]/70">
                             Query ran successfully but returned 0 rows.
                           </div>
                         ) : (
                           live.result && (
-                            <div className="rounded border border-slate-800 bg-slate-950 overflow-hidden">
+                            <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] overflow-hidden">
                               <div className="overflow-x-auto max-h-64">
                                 <table className="w-full text-left border-collapse text-xs">
                                   <thead>
-                                    <tr className="border-b border-slate-800 bg-slate-900/90 text-slate-200 font-mono text-[11px]">
+                                    <tr className="border-b border-[#e4e4e7]/25 bg-[#121216] text-[#e4e4e7] font-mono text-[10px] uppercase tracking-wider">
                                       {live.result.columns.map((col, cIdx) => (
                                         <th
                                           key={col}
-                                          className="py-2 px-3 whitespace-nowrap"
+                                          className="py-2 px-3 whitespace-nowrap font-bold"
                                         >
                                           <button
                                             type="button"
                                             onClick={() => handleSortColumn(item.id, cIdx)}
-                                            className="inline-flex items-center gap-1 hover:text-sky-300 font-medium"
+                                            className="inline-flex items-center gap-1 hover:text-[#38bdf8] cursor-pointer"
                                           >
                                             <span>{col}</span>
-                                            <ArrowUpDown className="w-2.5 h-2.5 text-slate-500" />
+                                            <ArrowUpDown className="w-2.5 h-2.5 text-[#38bdf8]" />
                                           </button>
                                         </th>
                                       ))}
                                     </tr>
                                   </thead>
-                                  <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
+                                  <tbody className="divide-y divide-[#e4e4e7]/10 font-mono text-[11px]">
                                     {getSortedLiveRows(item.id, live.result.rows).map(
                                       (row, rIdx) => (
                                         <tr
                                           key={rIdx}
-                                          className="hover:bg-slate-900/50"
+                                          className="hover:bg-[#e4e4e7]/[0.03] transition-colors"
                                         >
                                           {row.map((cell, cIdx) => (
                                             <td
                                               key={cIdx}
-                                              className="py-1.5 px-3 whitespace-nowrap text-slate-200 tabular-nums"
+                                              className="py-1.5 px-3 whitespace-nowrap text-[#e4e4e7] tabular-nums"
                                             >
                                               {cell === null ? (
-                                                <span className="text-slate-500 italic">
+                                                <span className="text-[#e4e4e7]/40 italic">
                                                   NULL
                                                 </span>
                                               ) : typeof cell === 'number' ? (

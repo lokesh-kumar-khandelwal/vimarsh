@@ -4,11 +4,13 @@ import {
   AlertTriangle,
   ArrowUpDown,
   BarChart3,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   Code2,
+  Copy,
   Database,
   Download,
   HelpCircle,
@@ -44,6 +46,7 @@ import {
   PENDING_INPUT_HINT,
   sessionStore,
 } from '../engine/sessionStore';
+import { formatSql } from '../engine/sqlFormatter';
 import { PROMPT_VERSION } from '../engine/systemPrompt';
 
 import type {
@@ -67,9 +70,14 @@ interface ClarificationEngineWorkspaceProps {
   onConnectionStateChange: (next: ByokConnectionState) => void;
   isLoadingDb?: boolean;
   onResetDatabase: () => void;
+  externalAction?: {
+    type: 'focus_ask' | 'toggle_history' | 'toggle_schema' | 'select_example';
+    payload?: string;
+    seq: number;
+  } | null;
 }
 
-const PRIMARY_EXAMPLE_QUESTIONS: ReadonlyArray<string> = [
+export const PRIMARY_EXAMPLE_QUESTIONS: ReadonlyArray<string> = [
   'What was our total revenue last month?',
   'Which 5 products generated the most revenue?',
   'How many orders were delivered last month?',
@@ -295,6 +303,7 @@ export const ClarificationEngineWorkspace: React.FC<
   onConnectionStateChange,
   isLoadingDb = false,
   onResetDatabase,
+  externalAction,
 }) => {
   const [sessionState, setSessionState] = useState<SessionState>(() =>
     sessionStore.getState()
@@ -322,6 +331,7 @@ export const ClarificationEngineWorkspace: React.FC<
   const latestTurnRef = useRef<HTMLElement | null>(null);
   const latestResponseRef = useRef<HTMLElement | null>(null);
   const pendingAutoScrollRef = useRef<'loading' | 'response' | null>(null);
+  const lastExternalSeqRef = useRef<number>(0);
 
   // Auto-scroll effect 1: Smoothly bring the loading banner into view when a question is submitted
   useEffect(() => {
@@ -397,7 +407,7 @@ export const ClarificationEngineWorkspace: React.FC<
     setQuestionInput(question);
     setInputFeedback(null);
     questionInputRef.current?.scrollIntoView({
-      behavior: 'smooth',
+      behavior: getScrollBehavior(),
       block: 'center',
     });
     setTimeout(() => {
@@ -465,6 +475,31 @@ export const ClarificationEngineWorkspace: React.FC<
       questionInputRef.current?.focus();
     }
   };
+
+  // Handle sidebar quick actions from App shell
+  useEffect(() => {
+    if (!externalAction || externalAction.seq === lastExternalSeqRef.current) {
+      return;
+    }
+    lastExternalSeqRef.current = externalAction.seq;
+    if (externalAction.type === 'focus_ask') {
+      questionInputRef.current?.scrollIntoView({
+        behavior: getScrollBehavior(),
+        block: 'center',
+      });
+      questionInputRef.current?.focus();
+    } else if (externalAction.type === 'toggle_history') {
+      setShowQueryHistory((prev) => !prev);
+    } else if (externalAction.type === 'toggle_schema') {
+      setShowDataReference((prev) => !prev);
+    } else if (
+      externalAction.type === 'select_example' &&
+      externalAction.payload
+    ) {
+      handleSelectExample(externalAction.payload);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalAction]);
 
   const toggleReasoning = (turnId: string) => {
     setExpandedReasoning((prev) => ({
@@ -534,20 +569,40 @@ export const ClarificationEngineWorkspace: React.FC<
     }, 2000);
   };
 
+  const [rawSqlMode, setRawSqlMode] = useState<Record<string, boolean>>({});
+  const [copiedSqlId, setCopiedSqlId] = useState<string | null>(null);
+
+  const handleCopySql = async (turnId: string, sqlText: string) => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(sqlText);
+        setCopiedSqlId(turnId);
+        setTimeout(() => {
+          setCopiedSqlId((curr) => (curr === turnId ? null : curr));
+        }, 2000);
+      }
+    } catch {
+      setCopiedSqlId(null);
+    }
+  };
+
   const turns = sessionState.turns;
 
   return (
     <div className="max-w-4xl mx-auto w-full space-y-6">
       {/* Primary Workspace Heading & Supporting Description */}
       <header className="space-y-2">
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-100 tracking-tight text-balance">
-          Ask questions about your data
+        <span className="label-mono text-[#38bdf8] block">
+          NATURAL-LANGUAGE CLARIFICATION WORKSPACE
+        </span>
+        <h1 className="font-syne font-extrabold text-3xl sm:text-4xl uppercase text-[#e4e4e7] tracking-tight leading-[0.95]">
+          ASK QUESTIONS ABOUT YOUR DATA
         </h1>
-        <p className="text-sm text-slate-300 leading-relaxed max-w-2xl">
+        <p className="text-xs sm:text-sm text-[#e4e4e7]/65 leading-relaxed max-w-2xl">
           Ask in plain English. Vimarsh checks your question, clarifies ambiguity
           when necessary, and safely retrieves results from the sample database.
         </p>
-        <p className="text-xs text-slate-400">
+        <p className="text-[11px] font-mono text-[#e4e4e7]/50 uppercase tracking-wider">
           Ask a question &rarr; clarify if needed &rarr; review your results.
         </p>
       </header>
@@ -566,26 +621,26 @@ export const ClarificationEngineWorkspace: React.FC<
       {/* Primary Question Input & Three User-Friendly Example Questions */}
       <section
         aria-label="Ask a Question"
-        className="rounded-xl border border-slate-800 bg-slate-900/80 p-5 space-y-4"
+        className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 sm:p-6 space-y-4"
       >
         {/* Active Pending Clarification Banner when in a multi-turn clarification flow */}
         {sessionState.pending && (
           <div
             role="status"
             aria-label="Active Clarification Context"
-            className="rounded-lg border border-amber-700/80 bg-amber-950/30 p-3.5 flex flex-wrap items-center justify-between gap-3"
+            className="rounded-none border border-[#fbbf24]/60 bg-[#fbbf24]/[0.06] p-3.5 flex flex-wrap items-center justify-between gap-3"
           >
             <div className="space-y-0.5">
-              <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold uppercase tracking-wider text-[#fbbf24]">
                 <HelpCircle className="w-4 h-4 shrink-0" />
                 <span>
                   Clarification in progress (Round {sessionState.pending.round}{' '}
                   of 3)
                 </span>
               </div>
-              <p className="text-xs text-slate-200">
+              <p className="text-xs text-[#e4e4e7]/75">
                 Answering for:{' '}
-                <strong className="font-mono text-white">
+                <strong className="font-mono text-[#e4e4e7]">
                   {sessionState.pending.original_question}
                 </strong>
               </p>
@@ -594,7 +649,7 @@ export const ClarificationEngineWorkspace: React.FC<
               type="button"
               onClick={() => sessionStore.startNewQuestion()}
               disabled={isSubmitting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-700/80 bg-amber-900/40 text-amber-100 hover:bg-amber-800/50 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-none border border-[#fbbf24] bg-[#fbbf24] text-[#0c0c0e] hover:bg-[#fbbf24]/90 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <MessageSquarePlus className="w-3.5 h-3.5" />
               <span>Start New Question</span>
@@ -609,21 +664,21 @@ export const ClarificationEngineWorkspace: React.FC<
           }}
           className="space-y-3"
         >
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label
               htmlFor="vimarsh-question-input"
-              className="block text-xs font-semibold text-slate-200"
+              className="block text-xs font-mono font-bold uppercase tracking-wider text-[#e4e4e7]"
             >
               {sessionState.pending
                 ? 'Your clarification response'
                 : 'Your question'}
             </label>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={() => setShowQueryHistory((prev) => !prev)}
                 aria-expanded={showQueryHistory}
-                className="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-medium focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-[#38bdf8] hover:text-[#e4e4e7] cursor-pointer"
               >
                 <History className="w-3.5 h-3.5" />
                 <span>
@@ -639,7 +694,7 @@ export const ClarificationEngineWorkspace: React.FC<
                       type="button"
                       onClick={() => sessionStore.startNewQuestion()}
                       disabled={isSubmitting}
-                      className="text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                      className="text-[11px] font-mono uppercase tracking-wider text-[#fbbf24] hover:underline cursor-pointer"
                     >
                       New question
                     </button>
@@ -651,7 +706,7 @@ export const ClarificationEngineWorkspace: React.FC<
                       setInputFeedback(null);
                     }}
                     disabled={isSubmitting}
-                    className="text-xs text-slate-400 hover:text-slate-200 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                    className="text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/60 hover:text-[#f87171] underline cursor-pointer"
                   >
                     Clear conversation
                   </button>
@@ -677,7 +732,7 @@ export const ClarificationEngineWorkspace: React.FC<
                   : 'Ask about customers, products, orders, or revenue...'
               }
               maxLength={500}
-              className="flex-1 px-3.5 py-2.5 text-sm rounded-lg bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-500 focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-50"
+              className="flex-1 px-3.5 py-2.5 text-sm font-mono rounded-none bg-[#0c0c0e] border border-[#e4e4e7]/30 text-[#e4e4e7] placeholder-[#e4e4e7]/40 focus:border-[#38bdf8] disabled:opacity-50"
             />
             <button
               type="submit"
@@ -686,32 +741,30 @@ export const ClarificationEngineWorkspace: React.FC<
                 questionInput.trim().length === 0 ||
                 !schemaContext
               }
-              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-300"
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-xs font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-40 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-3.5 h-3.5" />
               <span>{isSubmitting ? 'Checking...' : 'Ask Vimarsh'}</span>
             </button>
           </div>
         </form>
 
         {inputFeedback && (
-          <p role="status" className="text-xs text-amber-300">
+          <p role="status" className="text-xs font-mono text-[#fbbf24]">
             {inputFeedback}
           </p>
         )}
 
         {/* Exactly Three User-Friendly Example Questions + Collapsible Data Reference Toggle */}
-        <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
+        <div className="pt-3 border-t border-[#e4e4e7]/15 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-medium text-slate-400">
-              Try an example question:
-            </span>
+            <span className="label-mono">TRY AN EXAMPLE QUESTION:</span>
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={() => setShowQueryHistory((prev) => !prev)}
                 aria-expanded={showQueryHistory}
-                className="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/70 hover:text-[#38bdf8] underline cursor-pointer"
               >
                 <History className="w-3.5 h-3.5" />
                 <span>
@@ -724,7 +777,7 @@ export const ClarificationEngineWorkspace: React.FC<
                 type="button"
                 onClick={() => setShowDataReference((prev) => !prev)}
                 aria-expanded={showDataReference}
-                className="inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 underline focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/70 hover:text-[#38bdf8] underline cursor-pointer"
               >
                 <Database className="w-3.5 h-3.5" />
                 <span>
@@ -743,7 +796,7 @@ export const ClarificationEngineWorkspace: React.FC<
                 type="button"
                 disabled={isSubmitting || !schemaContext}
                 onClick={() => handleSelectExample(q)}
-                className="text-left p-3 rounded-lg border border-slate-800 bg-slate-950/70 hover:bg-slate-800/70 hover:border-slate-700 disabled:opacity-50 transition-colors text-xs text-slate-200 font-medium leading-snug focus-visible:outline-2 focus-visible:outline-sky-400"
+                className="text-left p-3 rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] hover:border-[#38bdf8] hover:text-[#38bdf8] disabled:opacity-50 transition-colors text-xs text-[#e4e4e7] font-mono leading-snug cursor-pointer"
               >
                 &ldquo;{q}&rdquo;
               </button>
@@ -781,17 +834,17 @@ export const ClarificationEngineWorkspace: React.FC<
                   key={turn.id}
                   ref={isLatestUserTurn ? latestTurnRef : undefined}
                   aria-label="Your Question"
-                  className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 flex items-start justify-between gap-4 scroll-mt-20"
+                  className="rounded-none border border-[#e4e4e7]/20 bg-[#121216] px-4 py-3 flex items-start justify-between gap-4 scroll-mt-20"
                 >
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-medium text-slate-400">
+                  <div className="space-y-1">
+                    <div className="label-mono text-[#38bdf8]">
                       Your question
                     </div>
-                    <p className="text-sm font-medium text-slate-100 whitespace-pre-wrap break-words">
+                    <p className="text-sm font-medium text-[#e4e4e7] whitespace-pre-wrap break-words">
                       {turn.question}
                     </p>
                   </div>
-                  <span className="font-mono text-xs text-slate-400 shrink-0 tabular-nums">
+                  <span className="font-mono text-xs text-[#e4e4e7]/50 shrink-0 tabular-nums">
                     {new Date(turn.timestamp).toLocaleTimeString()}
                   </span>
                 </article>
@@ -823,20 +876,20 @@ export const ClarificationEngineWorkspace: React.FC<
                 aria-label={`Vimarsh ${
                   aTurn.processingError ? 'Error' : response.status
                 } Response`}
-                className={`rounded-xl border p-5 space-y-4 scroll-mt-20 ${
+                className={`rounded-none border p-5 space-y-4 scroll-mt-20 ${
                   response.status === 'SUCCESS'
-                    ? 'border-slate-800 bg-slate-900/85'
+                    ? 'border-[#e4e4e7]/25 bg-[#121216]'
                     : response.status === 'CLARIFY'
-                      ? 'border-amber-700/80 bg-amber-950/20'
-                      : 'border-rose-800/80 bg-rose-950/20'
+                      ? 'border-[#fbbf24]/60 bg-[#fbbf24]/[0.04]'
+                      : 'border-[#f87171]/60 bg-[#f87171]/[0.04]'
                 }`}
               >
                 {/* State Header */}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2.5">
                     {response.status === 'SUCCESS' ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 rounded-none bg-[#4ade80] text-[#0c0c0e]">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                         <span>
                           {aTurn.executionResult?.isEmpty
                             ? 'Query Completed (No Matching Rows)'
@@ -844,18 +897,18 @@ export const ClarificationEngineWorkspace: React.FC<
                         </span>
                       </span>
                     ) : response.status === 'CLARIFY' ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-300">
-                        <HelpCircle className="w-4 h-4 shrink-0" />
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 rounded-none bg-[#fbbf24] text-[#0c0c0e]">
+                        <HelpCircle className="w-3.5 h-3.5 shrink-0" />
                         <span>Clarification Needed</span>
                       </span>
                     ) : aTurn.processingError && errorClassification ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-300">
-                        <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 rounded-none bg-[#f87171] text-[#0c0c0e]">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                         <span>{errorClassification.title}</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-300">
-                        <XCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 rounded-none bg-[#f87171] text-[#0c0c0e]">
+                        <XCircle className="w-3.5 h-3.5 shrink-0" />
                         <span>
                           {aTurn.blockedByGuard
                             ? 'Blocked by Safety Guard'
@@ -865,7 +918,7 @@ export const ClarificationEngineWorkspace: React.FC<
                     )}
 
                     {aTurn.repaired && (
-                      <span className="inline-flex items-center gap-1 text-xs text-amber-300">
+                      <span className="inline-flex items-center gap-1 text-xs font-mono text-[#fbbf24]">
                         <Wrench className="w-3.5 h-3.5" />
                         <span>
                           Automatically repaired query ({aTurn.repairCount}{' '}
@@ -875,7 +928,7 @@ export const ClarificationEngineWorkspace: React.FC<
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 font-mono text-xs text-slate-400 tabular-nums">
+                  <div className="flex items-center gap-2 font-mono text-xs text-[#e4e4e7]/60 tabular-nums">
                     <Clock className="w-3.5 h-3.5" />
                     <span>{aTurn.latencyMs} ms</span>
                   </div>
@@ -884,10 +937,10 @@ export const ClarificationEngineWorkspace: React.FC<
                 {/* 1. CLARIFICATION STATE */}
                 {response.status === 'CLARIFY' && (
                   <div className="space-y-3.5">
-                    <p className="text-base font-semibold text-slate-100">
+                    <p className="text-base font-semibold text-[#e4e4e7]">
                       {response.follow_up_question}
                     </p>
-                    <p className="text-xs text-slate-300">
+                    <p className="text-xs font-mono text-[#e4e4e7]/65">
                       Select an option below or type your answer in the box
                       above:
                     </p>
@@ -902,7 +955,7 @@ export const ClarificationEngineWorkspace: React.FC<
                           type="button"
                           disabled={!isConnected || isSubmitting}
                           onClick={() => void handleAskQuestion(option)}
-                          className="px-3.5 py-2 text-xs font-semibold rounded-lg border border-amber-600/80 bg-amber-900/35 text-amber-100 hover:bg-amber-800/50 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                          className="px-3.5 py-2 text-xs font-mono font-bold rounded-none border border-[#fbbf24] bg-[#0c0c0e] text-[#fbbf24] hover:bg-[#fbbf24] hover:text-[#0c0c0e] disabled:opacity-50 transition-colors cursor-pointer"
                         >
                           {option}
                         </button>
@@ -914,9 +967,9 @@ export const ClarificationEngineWorkspace: React.FC<
                 {/* 2. REJECTION OR ERROR STATE */}
                 {response.status === 'REJECT' && (
                   <div className="space-y-3">
-                    <div className="flex items-start gap-2.5 text-sm text-rose-100">
-                      <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                      <p className="whitespace-pre-wrap break-words leading-relaxed">
+                    <div className="flex items-start gap-2.5 text-sm text-[#f87171]">
+                      <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+                      <p className="whitespace-pre-wrap break-words leading-relaxed font-medium">
                         {response.rejection_reason}
                       </p>
                     </div>
@@ -927,18 +980,18 @@ export const ClarificationEngineWorkspace: React.FC<
                         <div
                           role="alert"
                           aria-label="503 Service Unavailable Recovery Details"
-                          className="rounded-lg border border-amber-700/70 bg-amber-950/35 p-3.5 text-xs text-slate-200 space-y-1.5"
+                          className="rounded-none border border-[#fbbf24]/50 bg-[#0c0c0e] p-4 text-xs text-[#e4e4e7] space-y-1.5"
                         >
-                          <div className="font-semibold text-amber-200">
+                          <div className="font-mono font-bold uppercase tracking-wider text-[#fbbf24]">
                             What happened &amp; how to recover without reloading
                           </div>
-                          <p className="text-slate-300 leading-relaxed">
+                          <p className="text-[#e4e4e7]/75 leading-relaxed">
                             Google&apos;s Gemini service returned HTTP 503
                             (Service Unavailable) due to a temporary capacity
                             spike. Vimarsh automatically retried your request
                             with exponential backoff and executed 0 SQL queries
                             to keep your session clean. Click{' '}
-                            <strong className="text-white">
+                            <strong className="text-[#e4e4e7]">
                               Retry Question
                             </strong>{' '}
                             below to re-send your question in place.
@@ -955,7 +1008,7 @@ export const ClarificationEngineWorkspace: React.FC<
                             onClick={() =>
                               void handleAskQuestion(prevUserTurn.question)
                             }
-                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg border border-sky-500/80 bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-300"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-50 transition-colors cursor-pointer"
                           >
                             <RefreshCw className="w-3.5 h-3.5" />
                             <span>Retry Question</span>
@@ -969,7 +1022,7 @@ export const ClarificationEngineWorkspace: React.FC<
                             }
                             questionInputRef.current?.focus();
                           }}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                          className="px-3 py-1.5 text-xs font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/35 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
                         >
                           Edit Question
                         </button>
@@ -982,12 +1035,12 @@ export const ClarificationEngineWorkspace: React.FC<
                 {response.status === 'SUCCESS' && (
                   <div className="space-y-4">
                     {aTurn.executionResult?.isEmpty ? (
-                      <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-5 space-y-1.5">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-                          <Info className="w-4 h-4 text-sky-400 shrink-0" />
+                      <div className="rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] p-5 space-y-1.5">
+                        <div className="flex items-center gap-2 text-sm font-mono font-bold text-[#e4e4e7]">
+                          <Info className="w-4 h-4 text-[#38bdf8] shrink-0" />
                           <span>No results matched your question.</span>
                         </div>
-                        <p className="text-xs text-slate-400">
+                        <p className="text-xs text-[#e4e4e7]/65">
                           The query ran safely against the sample database, but
                           0 rows matched your filters. Try broadening the time
                           range or checking the sample values in the database
@@ -997,19 +1050,19 @@ export const ClarificationEngineWorkspace: React.FC<
                     ) : (
                       aTurn.executionResult && (
                         <>
-                          <div className="rounded-lg border border-slate-800 bg-slate-950/80 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                          <div className="rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
                             <div className="space-y-0.5 min-w-[200px]">
                               {factualSummary ? (
                                 <>
-                                  <div className="text-base font-semibold text-slate-100 font-mono tabular-nums">
+                                  <div className="text-base font-bold text-[#e4e4e7] font-mono tabular-nums">
                                     {factualSummary.headline}
                                   </div>
-                                  <div className="text-xs text-slate-400 font-mono tabular-nums">
+                                  <div className="text-xs text-[#e4e4e7]/60 font-mono tabular-nums">
                                     {factualSummary.subline}
                                   </div>
                                 </>
                               ) : (
-                                <div className="text-sm font-semibold text-slate-100 font-mono tabular-nums">
+                                <div className="text-sm font-bold text-[#e4e4e7] font-mono tabular-nums">
                                   Query Results ({aTurn.executionResult.rowCount}{' '}
                                   {aTurn.executionResult.rowCount === 1 ? 'row' : 'rows'})
                                 </div>
@@ -1026,25 +1079,25 @@ export const ClarificationEngineWorkspace: React.FC<
                               }
                               aria-label="Download query results as CSV"
                               title="Download query results as CSV"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-sky-400 shrink-0"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-none border border-[#e4e4e7]/40 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors shrink-0 cursor-pointer"
                             >
                               {downloadedTurnId === aTurn.id ? (
                                 <>
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                  <span className="text-emerald-300">Downloaded CSV</span>
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-[#4ade80]" />
+                                  <span className="text-[#4ade80]">Downloaded CSV</span>
                                 </>
                               ) : (
                                 <>
-                                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                                  <Download className="w-3.5 h-3.5 text-[#38bdf8]" />
                                   <span>Download CSV</span>
                                 </>
                               )}
                             </button>
                           </div>
 
-                          <div className="rounded-lg border border-slate-800 bg-slate-950 overflow-hidden">
+                          <div className="rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] overflow-hidden">
                             {aTurn.executionResult.truncated && (
-                              <div className="px-3.5 py-2 border-b border-slate-800 text-xs text-amber-300 bg-amber-950/20">
+                              <div className="px-3.5 py-2 border-b border-[#fbbf24]/40 text-xs font-mono text-[#fbbf24] bg-[#fbbf24]/10">
                                 Showing the first 1,000 rows (maximum query row
                                 limit).
                               </div>
@@ -1052,44 +1105,44 @@ export const ClarificationEngineWorkspace: React.FC<
                             <div className="overflow-x-auto max-h-96">
                               <table className="w-full text-left border-collapse text-xs">
                                 <thead>
-                                  <tr className="border-b border-slate-800 bg-slate-900/90 text-slate-200 font-mono text-xs">
+                                  <tr className="border-b-2 border-[#e4e4e7] bg-[#121216] text-[#e4e4e7] font-mono text-[11px] uppercase tracking-wider">
                                     {aTurn.executionResult.columns.map(
                                       (col, cIdx) => (
                                         <th
                                           key={col}
-                                          className="py-2.5 px-3.5 whitespace-nowrap"
+                                          className="py-2.5 px-3.5 whitespace-nowrap font-bold"
                                         >
                                           <button
                                             type="button"
                                             onClick={() =>
                                               handleSortColumn(aTurn.id, cIdx)
                                             }
-                                            className="inline-flex items-center gap-1.5 hover:text-sky-300 focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                                            className="inline-flex items-center gap-1.5 hover:text-[#38bdf8] cursor-pointer"
                                           >
                                             <span>{col}</span>
-                                            <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                                            <ArrowUpDown className="w-3 h-3 text-[#38bdf8]" />
                                           </button>
                                         </th>
                                       )
                                     )}
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
+                                <tbody className="divide-y divide-[#e4e4e7]/10 font-mono text-xs">
                                   {getSortedRows(
                                     aTurn.id,
                                     aTurn.executionResult.rows
                                   ).map((row, rIdx) => (
                                     <tr
                                       key={rIdx}
-                                      className="hover:bg-slate-900/50"
+                                      className="hover:bg-[#e4e4e7]/[0.03] transition-colors"
                                     >
                                       {row.map((cell, cIdx) => (
                                         <td
                                           key={cIdx}
-                                          className="py-2.5 px-3.5 whitespace-nowrap text-slate-100 tabular-nums"
+                                          className="py-2.5 px-3.5 whitespace-nowrap text-[#e4e4e7] tabular-nums"
                                         >
                                           {cell === null ? (
-                                            <span className="text-slate-500 italic">
+                                            <span className="text-[#e4e4e7]/40 italic">
                                               NULL
                                             </span>
                                           ) : typeof cell === 'number' ? (
@@ -1109,17 +1162,17 @@ export const ClarificationEngineWorkspace: React.FC<
                           {autoChart && (
                             <div
                               aria-label={`Chart of ${autoChart.valueColumn} by ${autoChart.labelColumn}`}
-                              className="rounded-lg border border-slate-800 bg-slate-950/90 p-4 space-y-3"
+                              className="rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] p-4 space-y-3"
                             >
-                              <div className="flex items-center justify-between text-xs text-slate-300">
-                                <span className="inline-flex items-center gap-1.5 font-semibold text-slate-200">
-                                  <BarChart3 className="w-4 h-4 text-sky-400" />
+                              <div className="flex items-center justify-between text-xs font-mono text-[#e4e4e7]">
+                                <span className="inline-flex items-center gap-1.5 font-bold uppercase tracking-wider">
+                                  <BarChart3 className="w-4 h-4 text-[#38bdf8]" />
                                   <span>
                                     {autoChart.valueColumn} by{' '}
                                     {autoChart.labelColumn}
                                   </span>
                                 </span>
-                                <span className="font-mono text-slate-400 tabular-nums">
+                                <span className="font-mono text-[#e4e4e7]/60 tabular-nums">
                                   {autoChart.items.length} items
                                 </span>
                               </div>
@@ -1141,16 +1194,16 @@ export const ClarificationEngineWorkspace: React.FC<
                                       key={`${item.label}_${itemIdx}`}
                                       className="grid grid-cols-12 items-center gap-3 text-xs font-mono"
                                     >
-                                      <div className="col-span-4 truncate text-slate-200">
+                                      <div className="col-span-4 truncate text-[#e4e4e7]">
                                         {item.label}
                                       </div>
-                                      <div className="col-span-6 bg-slate-900 rounded h-2.5 overflow-hidden">
+                                      <div className="col-span-6 bg-[#121216] border border-[#e4e4e7]/15 rounded-none h-3 overflow-hidden">
                                         <div
-                                          className="bg-sky-500 h-full rounded"
+                                          className="bg-[#38bdf8] h-full rounded-none transition-all duration-300"
                                           style={{ width: `${widthPct}%` }}
                                         />
                                       </div>
-                                      <div className="col-span-2 text-right text-slate-100 tabular-nums">
+                                      <div className="col-span-2 text-right text-[#38bdf8] font-bold tabular-nums">
                                         {item.value.toLocaleString()}
                                       </div>
                                     </div>
@@ -1166,14 +1219,14 @@ export const ClarificationEngineWorkspace: React.FC<
                 )}
 
                 {/* Expandable Details Footer: View SQL & How was this calculated? */}
-                <div className="pt-3 border-t border-slate-800/80 space-y-3">
+                <div className="pt-3 border-t border-[#e4e4e7]/15 space-y-3">
                   <div className="flex flex-wrap items-center gap-4">
                     {response.sql_query && (
                       <button
                         type="button"
                         onClick={() => toggleSql(aTurn.id)}
                         aria-expanded={isSqlOpen}
-                        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-400 hover:text-sky-300 focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                        className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider text-[#38bdf8] hover:text-[#e4e4e7] cursor-pointer"
                       >
                         <Code2 className="w-3.5 h-3.5" />
                         <span>{isSqlOpen ? 'Hide SQL' : 'View SQL'}</span>
@@ -1189,7 +1242,7 @@ export const ClarificationEngineWorkspace: React.FC<
                       type="button"
                       onClick={() => toggleReasoning(aTurn.id)}
                       aria-expanded={isReasoningOpen}
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white focus-visible:outline-2 focus-visible:outline-sky-400 rounded-xs"
+                      className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider text-[#e4e4e7]/65 hover:text-[#e4e4e7] cursor-pointer"
                     >
                       {isReasoningOpen ? (
                         <ChevronDown className="w-3.5 h-3.5" />
@@ -1205,34 +1258,84 @@ export const ClarificationEngineWorkspace: React.FC<
                   </div>
 
                   {isSqlOpen && response.sql_query && (
-                    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3.5 space-y-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-                        <span className="font-medium text-slate-300">
-                          Validated Read-Only SQLite Query
-                        </span>
-                        {aTurn.validatedTablesUsed.length > 0 && (
-                          <span className="font-mono">
-                            Tables used:{' '}
-                            <span className="text-sky-300">
-                              {aTurn.validatedTablesUsed.join(', ')}
-                            </span>
+                    <div className="rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] p-3.5 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-2 text-[#e4e4e7]/65 font-mono">
+                          <span className="font-bold uppercase tracking-wider text-[#e4e4e7]">
+                            Validated Read-Only SQLite Query
                           </span>
-                        )}
+                          {aTurn.validatedTablesUsed.length > 0 && (
+                            <span>
+                              Tables used:{' '}
+                              <span className="text-[#38bdf8] font-bold">
+                                {aTurn.validatedTablesUsed.join(', ')}
+                              </span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRawSqlMode((prev) => ({
+                                ...prev,
+                                [aTurn.id]: !prev[aTurn.id],
+                              }))
+                            }
+                            className="px-2 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
+                            title="Toggle between formatted indented SQL and compact single-line SQL"
+                          >
+                            {rawSqlMode[aTurn.id] ? 'Format SQL' : 'Compact SQL'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopySql(
+                                aTurn.id,
+                                rawSqlMode[aTurn.id]
+                                  ? response.sql_query!
+                                  : formatSql(response.sql_query!)
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
+                            title="Copy SQL query to clipboard"
+                            aria-label="Copy SQL query to clipboard"
+                          >
+                            {copiedSqlId === aTurn.id ? (
+                              <>
+                                <Check className="w-3 h-3 text-[#4ade80]" />
+                                <span className="text-[#4ade80]">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3 text-[#e4e4e7]/70" />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
-                      <pre className="font-mono text-xs text-sky-200 overflow-x-auto whitespace-pre-wrap break-words leading-relaxed">
-                        {response.sql_query}
-                      </pre>
+
+                      <div className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-3 overflow-x-auto">
+                        <pre className="font-mono text-xs text-[#38bdf8] whitespace-pre-wrap break-words leading-relaxed tab-size-2">
+                          {rawSqlMode[aTurn.id]
+                            ? response.sql_query
+                            : formatSql(response.sql_query)}
+                        </pre>
+                      </div>
                     </div>
                   )}
 
                   {isReasoningOpen && (
-                    <div className="rounded-lg border border-slate-800 bg-slate-950/90 p-3.5 space-y-2.5 text-xs">
+                    <div className="rounded-none border border-[#e4e4e7]/20 bg-[#0c0c0e] p-3.5 space-y-2.5 text-xs text-[#e4e4e7]">
                       {response.assumptions.length > 0 && (
                         <div className="space-y-1">
-                          <div className="font-semibold text-slate-200">
+                          <div className="font-mono font-bold uppercase tracking-wider text-[#38bdf8]">
                             Assumptions &amp; Business Rules Applied:
                           </div>
-                          <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                          <ul className="list-disc list-inside space-y-0.5 text-[#e4e4e7]/75">
                             {response.assumptions.map((assumption) => (
                               <li key={assumption}>{assumption}</li>
                             ))}
@@ -1241,16 +1344,16 @@ export const ClarificationEngineWorkspace: React.FC<
                       )}
 
                       <div className="space-y-1">
-                        <div className="font-semibold text-slate-200">
+                        <div className="font-mono font-bold uppercase tracking-wider text-[#38bdf8]">
                           Decision Summary:
                         </div>
-                        <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">
+                        <p className="text-[#e4e4e7]/75 leading-relaxed whitespace-pre-wrap">
                           {response.reasoning}
                         </p>
                       </div>
 
                       {aTurn.repaired && aTurn.originalError && (
-                        <div className="pt-1 border-t border-slate-800/80 text-amber-300 font-mono text-[11px]">
+                        <div className="pt-1 border-t border-[#e4e4e7]/15 text-[#fbbf24] font-mono text-[11px]">
                           Automatic repair note: {aTurn.originalError}
                         </div>
                       )}
@@ -1270,20 +1373,20 @@ export const ClarificationEngineWorkspace: React.FC<
           role="status"
           aria-live="polite"
           aria-label="Checking question and preparing query"
-          className="rounded-xl border border-sky-800/70 bg-slate-900/90 p-5 flex flex-wrap items-center justify-between gap-4 scroll-mt-20"
+          className="rounded-none border border-[#38bdf8] bg-[#121216] p-5 flex flex-wrap items-center justify-between gap-4 scroll-mt-20"
         >
           <div className="flex items-center gap-3">
-            <RefreshCw className="w-5 h-5 text-sky-400 animate-spin shrink-0" />
+            <RefreshCw className="w-5 h-5 text-[#38bdf8] animate-spin shrink-0" />
             <div className="space-y-0.5">
-              <p className="text-sm font-medium text-slate-100">
+              <p className="text-sm font-mono font-bold text-[#e4e4e7]">
                 Checking your question and preparing the query...
               </p>
               {submittingQuestion && (
-                <p className="text-xs text-sky-300 font-medium whitespace-pre-wrap break-words">
+                <p className="text-xs text-[#38bdf8] font-mono whitespace-pre-wrap break-words">
                   &ldquo;{submittingQuestion}&rdquo;
                 </p>
               )}
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#e4e4e7]/65">
                 Validating against schema rules, checking for ambiguity, and
                 verifying read-only SQL safety.
               </p>
@@ -1293,7 +1396,7 @@ export const ClarificationEngineWorkspace: React.FC<
           <button
             type="button"
             onClick={handleCancelRequest}
-            className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="px-3.5 py-1.5 text-xs font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/40 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#f87171] hover:text-[#f87171] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Cancel
           </button>
@@ -1522,27 +1625,27 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Engine Build & Runtime Diagnostics Metadata (moved out of primary Ask Data UX) */}
+      {/* Engine Build & Runtime Diagnostics Metadata */}
       <section
         aria-label="Engine Runtime Diagnostics"
-        className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 flex flex-wrap items-center justify-between gap-4 text-xs"
+        className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-4 flex flex-wrap items-center justify-between gap-4 text-xs"
       >
         <div className="space-y-0.5">
-          <div className="font-semibold text-slate-200">
+          <div className="font-mono font-bold uppercase tracking-wider text-[#e4e4e7]">
             Stage 4 Engine Architecture &amp; Runtime Metadata
           </div>
-          <p className="text-slate-400">
+          <p className="text-[#e4e4e7]/65">
             Full Clarification Chat UI, Auto-Chart, 32 Date-Proof Golden Tests,
             Multiset Comparator &amp; 10-Step Fail-Closed SQL Validator
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] tabular-nums text-slate-300 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+        <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] tabular-nums text-[#38bdf8] bg-[#0c0c0e] px-3 py-1.5 rounded-none border border-[#e4e4e7]/20">
           <span>PROMPT_VERSION: {PROMPT_VERSION}</span>
-          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" className="text-[#e4e4e7]/30">·</span>
           <span>MODEL: {GEMINI_MODEL}</span>
-          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" className="text-[#e4e4e7]/30">·</span>
           <span>sql.js: {SQL_JS_VERSION}</span>
-          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" className="text-[#e4e4e7]/30">·</span>
           <span>
             TIMEOUTS: probe={Math.round(CONNECT_PROBE_TIMEOUT_MS / 1000)}s / req=
             {Math.round(PER_REQUEST_TIMEOUT_MS / 1000)}s / total=
@@ -1554,24 +1657,24 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
       {/* Performance & Latency Telemetry Breakdown + Visual Performance Timeline */}
       <section
         aria-label="Performance and Latency Telemetry"
-        className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-5"
+        className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 space-y-5"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-sky-400" />
-            <h2 className="text-sm font-semibold text-slate-100">
+            <Clock className="w-4 h-4 text-[#38bdf8]" />
+            <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#e4e4e7]">
               Performance &amp; Latency Telemetry
             </h2>
           </div>
-          <span className="font-mono text-xs text-slate-400 tabular-nums">
+          <span className="font-mono text-xs text-[#e4e4e7]/60 tabular-nums">
             SDK internal retries: disabled (attempts=1) · App transport retries: max 2
           </span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 text-xs font-mono">
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">API-Key Probe</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">API-Key Probe</div>
+            <div className="text-sm font-bold text-[#e4e4e7] tabular-nums">
               {lastProbe
                 ? `${lastProbe.durationMs} ms`
                 : latestPerf?.probeDurationMs !== null &&
@@ -1580,95 +1683,95 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                   : '—'}
             </div>
             {lastProbe && (
-              <div className="text-[10px] text-slate-400">
+              <div className="text-[10px] text-[#e4e4e7]/55">
                 status={lastProbe.status} (retries={lastProbe.transportRetriesUsed})
               </div>
             )}
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">Gemini Calls</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">Gemini Calls</div>
+            <div className="text-sm font-bold text-[#38bdf8] tabular-nums">
               {latestPerf ? `${latestPerf.totalLlmDurationMs} ms` : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-[10px] text-[#e4e4e7]/55">
               {latestPerf ? `${latestPerf.llmCalls.length} call(s)` : 'No turn yet'}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">Transport Retries</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">Transport Retries</div>
+            <div className="text-sm font-bold text-[#e4e4e7] tabular-nums">
               {latestPerf ? latestPerf.transportRetriesUsed : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-[10px] text-[#e4e4e7]/55">
               {latestPerf ? `delay=${latestPerf.transportRetryDelayMs} ms` : '429/503'}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">JSON Retries</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">JSON Retries</div>
+            <div className="text-sm font-bold text-[#e4e4e7] tabular-nums">
               {latestPerf ? `${latestPerf.jsonRetriesUsed} / 1` : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">Contract nudge</div>
+            <div className="text-[10px] text-[#e4e4e7]/55">Contract nudge</div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">SQL Repairs</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">SQL Repairs</div>
+            <div className="text-sm font-bold text-[#fbbf24] tabular-nums">
               {latestPerf ? `${latestPerf.sqlRepairCount} / 2` : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-[10px] text-[#e4e4e7]/55">
               {latestPerf ? `${latestPerf.sqlRepairDurationMs} ms` : 'REPAIR loop'}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">Static SQL Check</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">Static SQL Check</div>
+            <div className="text-sm font-bold text-[#e4e4e7] tabular-nums">
               {latestPerf ? `${latestPerf.sqlStaticValidationDurationMs} ms` : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">Steps 1–8 AST</div>
+            <div className="text-[10px] text-[#e4e4e7]/55">Steps 1–8 AST</div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">SQLite Dry-Run / Exec</div>
-            <div className="text-sm font-semibold text-slate-100 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">SQLite Dry-Run / Exec</div>
+            <div className="text-sm font-bold text-[#4ade80] tabular-nums">
               {latestPerf
                 ? `${latestPerf.sqliteDryRunDurationMs} / ${latestPerf.sqliteExecutionDurationMs} ms`
                 : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">Steps 9 &amp; 10</div>
+            <div className="text-[10px] text-[#e4e4e7]/55">Steps 9 &amp; 10</div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 space-y-1">
-            <div className="text-[11px] text-slate-400">Total Question</div>
-            <div className="text-sm font-semibold text-sky-300 tabular-nums">
+          <div className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3 space-y-1">
+            <div className="label-mono">Total Question</div>
+            <div className="text-sm font-bold text-[#38bdf8] tabular-nums">
               {latestPerf
                 ? `${latestPerf.totalLatencyMs} ms`
                 : latestAssistantTurn
                   ? `${latestAssistantTurn.latencyMs} ms`
                   : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">End-to-end</div>
+            <div className="text-[10px] text-[#e4e4e7]/55">End-to-end</div>
           </div>
         </div>
 
         {/* Visual Performance Timeline: AI Prompt Rounds & SQL Query Execution */}
         <div
           aria-label="Visual Performance Timeline"
-          className="rounded-xl border border-slate-800 bg-slate-950/90 p-4 space-y-4"
+          className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-4 space-y-4"
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e4e4e7]/15 pb-3">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-sky-400" />
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-200">
+                <BarChart3 className="w-4 h-4 text-[#38bdf8]" />
+                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-[#e4e4e7]">
                   Visual Performance Timeline · AI Prompt Rounds &amp; SQL Execution
                 </h3>
               </div>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#e4e4e7]/60">
                 Tracks execution latency across Gemini prompt rounds (ANSWER, JSON_RETRY, REPAIR) and 10-step SQLite validation &amp; worker execution.
               </p>
             </div>
@@ -1678,7 +1781,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                 <div
                   role="group"
                   aria-label="Select conversation turn"
-                  className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800"
+                  className="flex items-center gap-1 bg-[#121216] p-1 rounded-none border border-[#e4e4e7]/20"
                 >
                   {assistantTurnsWithContext.map((entry) => {
                     const isSelected =
@@ -1690,10 +1793,10 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                         onClick={() =>
                           setSelectedTurnId(entry.assistantTurn.id)
                         }
-                        className={`px-2 py-1 text-[11px] font-mono rounded transition-colors tabular-nums ${
+                        className={`px-2 py-1 text-[11px] font-mono rounded-none transition-colors tabular-nums cursor-pointer ${
                           isSelected
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 font-semibold'
-                            : 'text-slate-400 hover:text-slate-200'
+                            ? 'bg-[#e4e4e7] text-[#0c0c0e] font-bold'
+                            : 'text-[#e4e4e7]/65 hover:text-[#38bdf8]'
                         }`}
                         title={entry.userQuestion}
                       >
@@ -1707,15 +1810,15 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
               <div
                 role="group"
                 aria-label="Timeline view mode"
-                className="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs"
+                className="flex items-center bg-[#121216] p-1 rounded-none border border-[#e4e4e7]/20 text-xs font-mono"
               >
                 <button
                   type="button"
                   onClick={() => setTimelineViewMode('waterfall')}
-                  className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                  className={`px-2.5 py-1 rounded-none transition-colors cursor-pointer ${
                     timelineViewMode === 'waterfall'
-                      ? 'bg-slate-800 text-slate-100'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-[#e4e4e7] text-[#0c0c0e] font-bold'
+                      : 'text-[#e4e4e7]/65 hover:text-[#38bdf8]'
                   }`}
                 >
                   Turn Breakdown
@@ -1723,10 +1826,10 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => setTimelineViewMode('session_comparison')}
-                  className={`px-2.5 py-1 rounded font-medium transition-colors ${
+                  className={`px-2.5 py-1 rounded-none transition-colors cursor-pointer ${
                     timelineViewMode === 'session_comparison'
-                      ? 'bg-slate-800 text-slate-100'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-[#e4e4e7] text-[#0c0c0e] font-bold'
+                      : 'text-[#e4e4e7]/65 hover:text-[#38bdf8]'
                   }`}
                 >
                   Session History ({assistantTurnsWithContext.length})
@@ -1737,30 +1840,30 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
 
           {!latestAssistantTurn ? (
             <div className="py-6 text-center space-y-2">
-              <p className="text-xs text-slate-400">
+              <p className="text-xs font-mono text-[#e4e4e7]/65">
                 No SQL queries or AI prompt rounds recorded yet in this session.
               </p>
-              <p className="text-[11px] text-slate-500 font-mono">
+              <p className="text-[11px] text-[#e4e4e7]/45 font-mono">
                 Submit a question in Ask Data or click &ldquo;Run Test Prompt&rdquo; below to populate the live execution timeline.
               </p>
             </div>
           ) : timelineViewMode === 'session_comparison' ? (
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#e4e4e7]/60">
                 <span>
                   Comparing {assistantTurnsWithContext.length} turn(s) · Peak turn latency: {maxSessionTurnLatencyMs} ms
                 </span>
                 <div className="flex items-center gap-4">
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-sky-500 inline-block" />
+                    <span className="w-2.5 h-2.5 bg-[#38bdf8] inline-block" />
                     AI Prompt Rounds
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block" />
+                    <span className="w-2.5 h-2.5 bg-[#4ade80] inline-block" />
                     SQL Validation &amp; Exec
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-xs bg-slate-600 inline-block" />
+                    <span className="w-2.5 h-2.5 bg-[#e4e4e7]/50 inline-block" />
                     Guard &amp; Parse
                   </span>
                 </div>
@@ -1802,50 +1905,50 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                         setSelectedTurnId(entry.assistantTurn.id);
                         setTimelineViewMode('waterfall');
                       }}
-                      className="w-full text-left rounded-lg border border-slate-800/90 bg-slate-900/60 hover:bg-slate-900 p-3 space-y-2 transition-colors"
+                      className="w-full text-left rounded-none border border-[#e4e4e7]/15 bg-[#121216] hover:border-[#38bdf8] p-3 space-y-2 transition-colors cursor-pointer"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-mono text-sky-400 font-semibold tabular-nums">
+                          <span className="font-mono text-[#38bdf8] font-bold tabular-nums">
                             #{entry.turnIndex}
                           </span>
-                          <span className="text-slate-200 truncate max-w-md">
+                          <span className="text-[#e4e4e7] truncate max-w-md font-medium">
                             {entry.userQuestion}
                           </span>
-                          <span className="font-mono text-[11px] text-slate-400">
+                          <span className="font-mono text-[11px] text-[#e4e4e7]/60">
                             · {entry.assistantTurn.response.status}
                           </span>
                         </div>
-                        <div className="font-mono text-[11px] text-slate-300 tabular-nums">
+                        <div className="font-mono text-[11px] text-[#e4e4e7]/60 tabular-nums">
                           AI: {turnAiMs} ms · SQL: {turnSqlMs} ms · Total:{' '}
-                          <span className="text-sky-300 font-semibold">
+                          <span className="text-[#38bdf8] font-bold">
                             {turnTotal} ms
                           </span>
                         </div>
                       </div>
 
-                      <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden p-0.5 border border-slate-800/80">
+                      <div className="w-full bg-[#0c0c0e] rounded-none h-3 overflow-hidden p-0.5 border border-[#e4e4e7]/20">
                         <div
-                          className="h-full flex rounded-full overflow-hidden"
+                          className="h-full flex rounded-none overflow-hidden"
                           style={{ width: `${scalePct}%` }}
                         >
                           {turnAiMs > 0 && (
                             <div
-                              className="bg-sky-500 h-full"
+                              className="bg-[#38bdf8] h-full"
                               style={{ width: `${Math.max(4, aiW)}%` }}
                               title={`AI Prompt Rounds: ${turnAiMs} ms`}
                             />
                           )}
                           {turnSqlMs > 0 && (
                             <div
-                              className="bg-emerald-500 h-full"
+                              className="bg-[#4ade80] h-full"
                               style={{ width: `${Math.max(4, sqlW)}%` }}
                               title={`SQL Validation & Execution: ${turnSqlMs} ms`}
                             />
                           )}
                           {turnOtherMs > 0 && (
                             <div
-                              className="bg-slate-600 h-full"
+                              className="bg-[#e4e4e7]/50 h-full"
                               style={{ width: `${Math.max(2, otherW)}%` }}
                               title={`Input Guard & Prompt Build: ${turnOtherMs} ms`}
                             />
@@ -1863,22 +1966,22 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-sky-400 font-semibold tabular-nums">
+                    <span className="font-mono text-[#38bdf8] font-bold tabular-nums">
                       Turn #{activeTurnEntry?.turnIndex ?? 1}
                     </span>
-                    <span className="text-slate-200 font-medium truncate max-w-xl">
+                    <span className="text-[#e4e4e7] font-medium truncate max-w-xl">
                       &ldquo;{activeTurnEntry?.userQuestion}&rdquo;
                     </span>
-                    <span className="font-mono text-[11px] text-slate-400">
+                    <span className="font-mono text-[11px] text-[#e4e4e7]/60">
                       · {latestAssistantTurn.response.status}
                     </span>
                   </div>
-                  <div className="font-mono text-xs text-slate-300 tabular-nums">
+                  <div className="font-mono text-xs text-[#e4e4e7]/60 tabular-nums">
                     Total Execution:{' '}
-                    <span className="text-sky-300 font-semibold">
+                    <span className="text-[#38bdf8] font-bold">
                       {totalTurnMs} ms
                     </span>{' '}
-                    <span className="text-slate-500">
+                    <span className="text-[#e4e4e7]/40">
                       / {PER_QUESTION_DEADLINE_MS} ms deadline
                     </span>
                   </div>
@@ -1887,25 +1990,25 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                 {/* Proportional Split Bar */}
                 <div
                   aria-label="Execution time proportion bar"
-                  className="h-3.5 w-full rounded-lg bg-slate-900 border border-slate-800 overflow-hidden flex p-0.5 gap-0.5"
+                  className="h-3.5 w-full rounded-none bg-[#121216] border border-[#e4e4e7]/20 overflow-hidden flex p-0.5 gap-0.5"
                 >
                   {aiPromptRoundMs > 0 && (
                     <div
-                      className="h-full bg-sky-500 rounded-l-sm transition-all"
+                      className="h-full bg-[#38bdf8] transition-all"
                       style={{ width: `${Math.max(4, aiSharePct)}%` }}
                       title={`AI Prompt Rounds: ${aiPromptRoundMs} ms (${aiSharePct}%)`}
                     />
                   )}
                   {totalSqlMs > 0 && (
                     <div
-                      className="h-full bg-emerald-500 transition-all"
+                      className="h-full bg-[#4ade80] transition-all"
                       style={{ width: `${Math.max(4, sqlSharePct)}%` }}
                       title={`SQL Validation & Execution: ${totalSqlMs} ms (${sqlSharePct}%)`}
                     />
                   )}
                   {prepAndParseMs > 0 && (
                     <div
-                      className="h-full bg-slate-600 rounded-r-sm transition-all"
+                      className="h-full bg-[#e4e4e7]/50 transition-all"
                       style={{ width: `${Math.max(3, prepSharePct)}%` }}
                       title={`Input Guard, Prompt Build & JSON Parse: ${prepAndParseMs} ms (${prepSharePct}%)`}
                     />
@@ -1913,32 +2016,32 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                 </div>
 
                 {/* Legend */}
-                <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] font-mono text-slate-400 pt-0.5">
+                <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] font-mono text-[#e4e4e7]/60 pt-0.5">
                   <div className="flex flex-wrap items-center gap-4">
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-xs bg-sky-500 inline-block" />
-                      <span className="text-slate-200">AI Prompt Rounds:</span>{' '}
-                      <span className="tabular-nums text-sky-300 font-semibold">
+                      <span className="w-2.5 h-2.5 bg-[#38bdf8] inline-block" />
+                      <span className="text-[#e4e4e7]">AI Prompt Rounds:</span>{' '}
+                      <span className="tabular-nums text-[#38bdf8] font-bold">
                         {aiPromptRoundMs} ms
                       </span>{' '}
                       ({aiSharePct}%)
                     </span>
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block" />
-                      <span className="text-slate-200">
+                      <span className="w-2.5 h-2.5 bg-[#4ade80] inline-block" />
+                      <span className="text-[#e4e4e7]">
                         SQL Validation &amp; Execution:
                       </span>{' '}
-                      <span className="tabular-nums text-emerald-300 font-semibold">
+                      <span className="tabular-nums text-[#4ade80] font-bold">
                         {totalSqlMs} ms
                       </span>{' '}
                       ({sqlSharePct}%)
                     </span>
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-xs bg-slate-600 inline-block" />
-                      <span className="text-slate-200">
+                      <span className="w-2.5 h-2.5 bg-[#e4e4e7]/50 inline-block" />
+                      <span className="text-[#e4e4e7]">
                         Guard, Prompt &amp; Parse:
                       </span>{' '}
-                      <span className="tabular-nums text-slate-300">
+                      <span className="tabular-nums text-[#e4e4e7]/70">
                         {prepAndParseMs} ms
                       </span>{' '}
                       ({prepSharePct}%)
@@ -1950,19 +2053,19 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
               {/* Dual-Track Detail Grid: AI Prompt Rounds Track vs SQL Query Track */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-1">
                 {/* Track 1: AI Prompt Rounds Track */}
-                <div className="rounded-lg border border-slate-800/90 bg-slate-900/50 p-3.5 space-y-3">
+                <div className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-3.5 space-y-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-sky-300 font-mono">
+                    <span className="text-xs font-bold text-[#38bdf8] font-mono">
                       1. AI Prompt Rounds ({latestPerf?.llmCalls.length ?? 0} round
                       {(latestPerf?.llmCalls.length ?? 0) === 1 ? '' : 's'})
                     </span>
-                    <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                    <span className="text-[11px] font-mono text-[#e4e4e7]/60 tabular-nums">
                       Budget: {PER_REQUEST_TIMEOUT_MS} ms / round
                     </span>
                   </div>
 
                   {!latestPerf || latestPerf.llmCalls.length === 0 ? (
-                    <div className="text-xs font-mono text-slate-400 py-3">
+                    <div className="text-xs font-mono text-[#e4e4e7]/60 py-3">
                       0 ms · Deterministic Input Guard handled this turn without invoking Gemini.
                     </div>
                   ) : (
@@ -1983,10 +2086,10 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                         );
                         const barColor =
                           call.phase === 'REPAIR'
-                            ? 'bg-amber-400'
+                            ? 'bg-[#fbbf24]'
                             : call.phase === 'JSON_RETRY'
-                              ? 'bg-indigo-400'
-                              : 'bg-sky-400';
+                              ? 'bg-[#e4e4e7]'
+                              : 'bg-[#38bdf8]';
 
                         return (
                           <div
@@ -1994,25 +2097,25 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                             className="space-y-1 text-xs font-mono"
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="text-slate-200 font-medium">
+                              <span className="text-[#e4e4e7] font-medium">
                                 Round #{idx + 1} · {call.phase}
                               </span>
-                              <span className="tabular-nums text-slate-300">
-                                <span className="font-semibold text-sky-300">
+                              <span className="tabular-nums text-[#e4e4e7]/60">
+                                <span className="font-bold text-[#38bdf8]">
                                   {call.durationMs} ms
                                 </span>{' '}
-                                <span className="text-slate-500">
+                                <span className="text-[#e4e4e7]/40">
                                   ({budgetPct}% of 25s cap)
                                 </span>
                               </span>
                             </div>
-                            <div className="h-2 w-full rounded-full bg-slate-950 overflow-hidden border border-slate-800/80">
+                            <div className="h-2 w-full rounded-none bg-[#0c0c0e] overflow-hidden border border-[#e4e4e7]/20">
                               <div
-                                className={`h-full rounded-full ${barColor}`}
+                                className={`h-full ${barColor}`}
                                 style={{ width: `${widthPct}%` }}
                               />
                             </div>
-                            <div className="flex items-center justify-between text-[10px] text-slate-400 tabular-nums">
+                            <div className="flex items-center justify-between text-[10px] text-[#e4e4e7]/50 tabular-nums">
                               <span>
                                 transportRetries={call.transportRetriesUsed}
                               </span>
@@ -2026,12 +2129,12 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                 </div>
 
                 {/* Track 2: SQL Query Validation & Execution Track */}
-                <div className="rounded-lg border border-slate-800/90 bg-slate-900/50 p-3.5 space-y-3">
+                <div className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-3.5 space-y-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-emerald-300 font-mono">
+                    <span className="text-xs font-bold text-[#4ade80] font-mono">
                       2. SQL Query Pipeline ({totalSqlMs} ms total)
                     </span>
-                    <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                    <span className="text-[11px] font-mono text-[#e4e4e7]/60 tabular-nums">
                       {latestAssistantTurn.executionResult
                         ? `${latestAssistantTurn.executionResult.rowCount} row(s) returned`
                         : '0 queries executed'}
@@ -2043,7 +2146,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                       {
                         label: 'Steps 1–8 · AST Static Validation',
                         ms: sqlStaticMs,
-                        barClass: 'bg-teal-400',
+                        barClass: 'bg-[#e4e4e7]/70',
                         note:
                           sqlStaticMs > 0 ||
                           latestTrace.some((t) => t.stage === 'SQL_VALIDATOR')
@@ -2053,7 +2156,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                       {
                         label: 'Step 9 · SQLite EXPLAIN QUERY PLAN Dry-Run',
                         ms: sqlDryRunMs,
-                        barClass: 'bg-emerald-400',
+                        barClass: 'bg-[#38bdf8]',
                         note:
                           sqlDryRunMs > 0 ||
                           latestTrace.some((t) => t.stage === 'DRY_RUN')
@@ -2063,7 +2166,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                       {
                         label: 'Step 10 · SQLite Web Worker Execution',
                         ms: sqlExecMs,
-                        barClass: 'bg-emerald-500',
+                        barClass: 'bg-[#4ade80]',
                         note: latestAssistantTurn.executionResult
                           ? `Executed in ${latestAssistantTurn.executionResult.executionTimeMs} ms · ${latestAssistantTurn.executionResult.columns.length} cols`
                           : 'Zero queries executed on CLARIFY/REJECT',
@@ -2082,20 +2185,20 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                       return (
                         <div key={sqlPhase.label} className="space-y-1">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-slate-200">
+                            <span className="text-[#e4e4e7]">
                               {sqlPhase.label}
                             </span>
-                            <span className="tabular-nums font-semibold text-emerald-300">
+                            <span className="tabular-nums font-bold text-[#4ade80]">
                               {sqlPhase.ms} ms
                             </span>
                           </div>
-                          <div className="h-2 w-full rounded-full bg-slate-950 overflow-hidden border border-slate-800/80">
+                          <div className="h-2 w-full rounded-none bg-[#0c0c0e] overflow-hidden border border-[#e4e4e7]/20">
                             <div
-                              className={`h-full rounded-full ${sqlPhase.barClass}`}
+                              className={`h-full ${sqlPhase.barClass}`}
                               style={{ width: `${pct}%` }}
                             />
                           </div>
-                          <div className="text-[10px] text-slate-400">
+                          <div className="text-[10px] text-[#e4e4e7]/50">
                             {sqlPhase.note}
                           </div>
                         </div>
@@ -2108,7 +2211,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
               {/* Chronological Stage Waterfall */}
               {waterfallItems.length > 0 && (
                 <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-[#e4e4e7]/60">
                     <span>
                       Chronological Pipeline Waterfall (0 ms → {waterfallTotalSpanMs} ms)
                     </span>
@@ -2131,36 +2234,36 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                       );
                       const barClass =
                         item.status === 'failed'
-                          ? 'bg-rose-500'
+                          ? 'bg-[#f87171]'
                           : item.category === 'ai'
-                            ? 'bg-sky-400'
+                            ? 'bg-[#38bdf8]'
                             : item.category === 'sql'
-                              ? 'bg-emerald-400'
-                              : 'bg-slate-400';
+                              ? 'bg-[#4ade80]'
+                              : 'bg-[#e4e4e7]/60';
 
                       return (
                         <div
                           key={`${item.stage}_${item.index}`}
                           className="grid grid-cols-12 items-center gap-2 text-[11px] font-mono"
                         >
-                          <div className="col-span-4 sm:col-span-3 truncate text-slate-300">
+                          <div className="col-span-4 sm:col-span-3 truncate text-[#e4e4e7]">
                             <span
                               className={
                                 item.status === 'failed'
-                                  ? 'text-rose-400'
+                                  ? 'text-[#f87171]'
                                   : item.category === 'ai'
-                                    ? 'text-sky-300'
+                                    ? 'text-[#38bdf8]'
                                     : item.category === 'sql'
-                                      ? 'text-emerald-300'
-                                      : 'text-slate-400'
+                                      ? 'text-[#4ade80]'
+                                      : 'text-[#e4e4e7]/65'
                               }
                             >
                               {item.stage}
                             </span>
                           </div>
-                          <div className="col-span-5 sm:col-span-6 h-2.5 rounded bg-slate-900 border border-slate-800/80 relative overflow-hidden">
+                          <div className="col-span-5 sm:col-span-6 h-2.5 rounded-none bg-[#121216] border border-[#e4e4e7]/20 relative overflow-hidden">
                             <div
-                              className={`absolute top-0 bottom-0 rounded ${barClass}`}
+                              className={`absolute top-0 bottom-0 ${barClass}`}
                               style={{
                                 left: `${leftPct}%`,
                                 width: `${widthPct}%`,
@@ -2168,9 +2271,9 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                               title={`${item.stage}: +${item.startMs} ms, duration ${item.durationMs} ms (${item.detail})`}
                             />
                           </div>
-                          <div className="col-span-3 text-right tabular-nums text-slate-400">
+                          <div className="col-span-3 text-right tabular-nums text-[#e4e4e7]/60">
                             +{item.startMs}ms ·{' '}
-                            <span className="text-slate-200 font-semibold">
+                            <span className="text-[#e4e4e7] font-bold">
                               {item.durationMs}ms
                             </span>
                           </div>
@@ -2185,18 +2288,17 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
         </div>
       </section>
 
-
       {/* Adversarial, Security & Ambiguity Diagnostic Examples (kept in Developer Tools) */}
       <section
         aria-label="Adversarial and Ambiguity Test Prompts"
-        className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-3"
+        className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 space-y-3"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold text-slate-100">
+            <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#e4e4e7]">
               Adversarial, Security &amp; Ambiguity Test Prompts
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-xs text-[#e4e4e7]/65 mt-0.5">
               Run security-guardrail and ambiguity test cases through the
               question pipeline and inspect the resulting trace.
             </p>
@@ -2204,7 +2306,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
         </div>
 
         {diagnosticNotice && (
-          <p role="status" className="text-xs text-amber-300">
+          <p role="status" className="text-xs font-mono text-[#fbbf24]">
             {diagnosticNotice}
           </p>
         )}
@@ -2213,23 +2315,23 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
           {DEVELOPER_DIAGNOSTIC_EXAMPLES.map((item) => (
             <div
               key={item.label}
-              className="rounded-lg border border-slate-800 bg-slate-950/70 p-3.5 flex flex-col justify-between gap-3"
+              className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3.5 flex flex-col justify-between gap-3"
             >
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-mono font-semibold text-sky-400">
+                  <span className="text-[11px] font-mono font-bold text-[#38bdf8]">
                     {item.category}
                   </span>
                   {item.worksOfflineGuard && (
-                    <span className="text-[10px] font-mono text-emerald-400">
+                    <span className="text-[10px] font-mono text-[#4ade80]">
                       Offline Guardrail
                     </span>
                   )}
                 </div>
-                <div className="text-xs font-semibold text-slate-100 font-mono">
+                <div className="text-xs font-bold text-[#e4e4e7] font-mono">
                   &ldquo;{item.question}&rdquo;
                 </div>
-                <p className="text-xs text-slate-400">{item.description}</p>
+                <p className="text-xs text-[#e4e4e7]/65">{item.description}</p>
               </div>
 
               <div>
@@ -2237,7 +2339,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
                   type="button"
                   disabled={!schemaContext || !dbClient || Boolean(runningExample)}
                   onClick={() => void handleRunDiagnosticExample(item)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/35 bg-[#121216] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] disabled:opacity-50 transition-colors cursor-pointer"
                 >
                   <Play className="w-3 h-3" />
                   <span>
@@ -2256,22 +2358,22 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
         {/* Live Engine Trace */}
         <section
           aria-label="Live Engine Trace"
-          className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-4"
+          className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 space-y-4"
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-sky-400" />
-              <h2 className="text-sm font-semibold text-slate-100">
+              <Activity className="w-4 h-4 text-[#38bdf8]" />
+              <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#e4e4e7]">
                 Latest Pipeline Stage Trace
               </h2>
             </div>
-            <span className="font-mono text-xs text-slate-400 tabular-nums">
+            <span className="font-mono text-xs text-[#38bdf8] tabular-nums">
               {latestTrace.length} stages
             </span>
           </div>
 
           {latestTrace.length === 0 ? (
-            <p className="text-xs text-slate-400 py-6 text-center">
+            <p className="text-xs font-mono text-[#e4e4e7]/60 py-6 text-center">
               Ask a question or run a test prompt above to inspect stage-by-stage
               pass/fail status and timing.
             </p>
@@ -2280,25 +2382,25 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
               {latestTrace.map((st, idx) => (
                 <div
                   key={`${st.stage}_${idx}`}
-                  className="p-3 rounded-lg border border-slate-800 bg-slate-950/80 space-y-1"
+                  className="p-3 rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] space-y-1"
                 >
                   <div className="flex items-center justify-between gap-2 text-xs font-mono">
                     <span
-                      className={`font-semibold ${
+                      className={`font-bold ${
                         st.status === 'passed'
-                          ? 'text-emerald-400'
+                          ? 'text-[#4ade80]'
                           : st.status === 'failed'
-                            ? 'text-rose-400'
-                            : 'text-slate-400'
+                            ? 'text-[#f87171]'
+                            : 'text-[#e4e4e7]/60'
                       }`}
                     >
                       {st.status === 'passed' ? 'PASS' : 'FAIL'} · {st.stage}
                     </span>
-                    <span className="text-slate-400 tabular-nums">
+                    <span className="text-[#e4e4e7]/60 tabular-nums">
                       {st.durationMs} ms
                     </span>
                   </div>
-                  <p className="text-xs text-slate-300 font-mono break-words">
+                  <p className="text-xs text-[#e4e4e7]/80 font-mono break-words">
                     {st.detail}
                   </p>
                 </div>
@@ -2310,14 +2412,14 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
         {/* Structured Audit Log */}
         <section
           aria-label="Structured Audit Log"
-          className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-4"
+          className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 space-y-4"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-slate-100">
+              <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#e4e4e7]">
                 Structured Audit Log ({auditEvents.length})
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-[#e4e4e7]/60 mt-0.5">
                 Records pipeline stages without API keys, result rows, or raw
                 prompts.
               </p>
@@ -2325,7 +2427,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
             <button
               type="button"
               onClick={handleDownloadAuditLog}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/35 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download Audit Log (JSON)</span>
@@ -2333,7 +2435,7 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
           </div>
 
           {auditEvents.length === 0 ? (
-            <p className="text-xs text-slate-400 py-6 text-center">
+            <p className="text-xs font-mono text-[#e4e4e7]/60 py-6 text-center">
               No audit events recorded in this session yet.
             </p>
           ) : (
@@ -2341,29 +2443,29 @@ export const EngineDiagnosticsPanel: React.FC<EngineDiagnosticsPanelProps> = ({
               {[...auditEvents].reverse().map((ev) => (
                 <div
                   key={ev.id}
-                  className="p-3 rounded-lg border border-slate-800 bg-slate-950/75 text-xs font-mono space-y-1"
+                  className="p-3 rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] text-xs font-mono space-y-1"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sky-300 font-semibold">
+                    <span className="text-[#38bdf8] font-bold">
                       {ev.source} · {ev.mode}
                     </span>
                     <span
-                      className={`tabular-nums ${
+                      className={`tabular-nums font-bold ${
                         ev.status === 'SUCCESS'
-                          ? 'text-emerald-400'
+                          ? 'text-[#4ade80]'
                           : ev.status === 'CLARIFY'
-                            ? 'text-amber-400'
-                            : 'text-rose-400'
+                            ? 'text-[#fbbf24]'
+                            : 'text-[#f87171]'
                       }`}
                     >
                       {ev.status} ({ev.latencyMs} ms)
                     </span>
                   </div>
-                  <div className="text-slate-300 break-words">
+                  <div className="text-[#e4e4e7] break-words">
                     {ev.validatorResult}
                   </div>
                   {ev.repairCount > 0 && (
-                    <div className="text-amber-300">
+                    <div className="text-[#fbbf24]">
                       repairCount: {ev.repairCount}
                     </div>
                   )}

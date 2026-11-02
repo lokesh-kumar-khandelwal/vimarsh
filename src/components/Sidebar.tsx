@@ -51,27 +51,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <section
       aria-label="Sample Database Reference: Schema, Join Hints, and Business Glossary"
-      className="w-full rounded-xl border border-slate-800 bg-slate-900/75 overflow-hidden flex flex-col"
+      className="w-full rounded-none border border-[#e4e4e7]/15 bg-[#121216] overflow-hidden flex flex-col"
     >
       {/* Header Tabs & Reset Trigger */}
-      <div className="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+      <div className="p-4 border-b border-[#e4e4e7]/15 bg-[#0c0c0e] flex flex-wrap items-center justify-between gap-3">
         <div
           role="tablist"
           aria-label="Data Reference Sections"
-          className="flex flex-wrap items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800"
+          className="flex flex-wrap items-center gap-1.5"
         >
           <button
             type="button"
             role="tab"
             aria-selected={sidebarTab === 'schema'}
             onClick={() => setSidebarTab('schema')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               sidebarTab === 'schema'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.06] text-[#38bdf8] font-bold'
+                : 'border-[#e4e4e7]/20 bg-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:border-[#e4e4e7]/50'
             }`}
           >
-            <Database className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <Database className="w-3.5 h-3.5 shrink-0" />
             <span>Tables &amp; Columns ({schemaContext?.tables.length ?? 5})</span>
           </button>
 
@@ -80,13 +80,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             role="tab"
             aria-selected={sidebarTab === 'glossary'}
             onClick={() => setSidebarTab('glossary')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               sidebarTab === 'glossary'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.06] text-[#38bdf8] font-bold'
+                : 'border-[#e4e4e7]/20 bg-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:border-[#e4e4e7]/50'
             }`}
           >
-            <BookOpen className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <BookOpen className="w-3.5 h-3.5 shrink-0" />
             <span>
               Business Glossary ({schemaContext?.glossary.length ?? 11})
             </span>
@@ -97,13 +97,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             role="tab"
             aria-selected={sidebarTab === 'joins'}
             onClick={() => setSidebarTab('joins')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               sidebarTab === 'joins'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.06] text-[#38bdf8] font-bold'
+                : 'border-[#e4e4e7]/20 bg-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:border-[#e4e4e7]/50'
             }`}
           >
-            <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <Link2 className="w-3.5 h-3.5 shrink-0" />
             <span>Join Hints ({schemaContext?.joinHints.length ?? 4})</span>
           </button>
         </div>
@@ -113,7 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={() => setConfirmingReset(true)}
             disabled={isLoading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/40 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>Reset Sample Database</span>
@@ -126,15 +126,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div
           role="alert"
           aria-label="Confirm Database Reset"
-          className="px-4 py-3.5 border-b border-amber-700/80 bg-amber-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          className="px-4 py-3.5 border-b border-[#f87171]/60 bg-[#f87171]/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
         >
-          <div className="flex items-start gap-2.5 text-xs text-amber-100">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex items-start gap-2.5 text-xs text-[#f87171]">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
-              <p className="font-semibold text-amber-200">
+              <p className="font-mono font-bold uppercase tracking-wider text-[#f87171]">
                 Recreate the in-memory sample database?
               </p>
-              <p className="text-slate-300">
+              <p className="text-[#e4e4e7]/75">
                 This will destroy and re-seed the SQLite Web Worker database back
                 to its initial sample state.
               </p>
@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => setConfirmingReset(false)}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-400"
+              className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/30 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#e4e4e7] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Cancel
             </button>
@@ -153,7 +153,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               type="button"
               onClick={handleConfirmReset}
               disabled={isLoading}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-amber-300"
+              className="px-3 py-1.5 text-[11px] font-mono font-bold uppercase tracking-wider rounded-none bg-[#f87171] text-[#0c0c0e] hover:bg-[#f87171]/90 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               Confirm Reset
             </button>
@@ -164,7 +164,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Body Content */}
       <div className="p-4 space-y-3">
         {!schemaContext ? (
-          <div className="p-4 text-xs text-slate-400">
+          <div className="p-4 text-xs font-mono text-[#e4e4e7]/65">
             {isLoading
               ? 'Loading sample database schema from SQLite Web Worker...'
               : 'Database schema is currently unavailable.'}
@@ -177,62 +177,62 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 return (
                   <div
                     key={table.name}
-                    className="rounded-lg border border-slate-800 bg-slate-950/60 overflow-hidden"
+                    className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] overflow-hidden"
                   >
                     <button
                       type="button"
                       onClick={() => toggleTable(table.name)}
                       aria-expanded={isOpen}
-                      className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-slate-800/50 transition-colors focus-visible:outline-2 focus-visible:outline-sky-400"
+                      className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-[#e4e4e7]/[0.04] transition-colors cursor-pointer"
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         {isOpen ? (
-                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <ChevronDown className="w-3.5 h-3.5 text-[#38bdf8] shrink-0" />
                         ) : (
-                          <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <ChevronRight className="w-3.5 h-3.5 text-[#e4e4e7]/60 shrink-0" />
                         )}
-                        <span className="font-mono text-xs font-semibold text-slate-100 truncate">
+                        <span className="font-mono text-xs font-bold text-[#e4e4e7] truncate">
                           {table.name}
                         </span>
-                        <span className="text-xs text-slate-400 truncate hidden sm:inline">
+                        <span className="text-xs text-[#e4e4e7]/60 truncate hidden sm:inline">
                           — {table.description}
                         </span>
                       </div>
-                      <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 ml-2">
+                      <span className="font-mono text-[11px] text-[#38bdf8] tabular-nums shrink-0 ml-2">
                         {table.rowCount} rows
                       </span>
                     </button>
 
                     {isOpen && (
-                      <div className="border-t border-slate-800/80 px-3.5 py-2.5 space-y-1.5">
-                        <p className="text-xs text-slate-400 sm:hidden pb-1">
+                      <div className="border-t border-[#e4e4e7]/15 bg-[#121216] px-3.5 py-2.5 space-y-1.5">
+                        <p className="text-xs text-[#e4e4e7]/65 sm:hidden pb-1">
                           {table.description}
                         </p>
                         {table.columns.map((col) => (
                           <div
                             key={col.name}
-                            className="space-y-0.5 py-1 border-b border-slate-900 last:border-b-0"
+                            className="space-y-0.5 py-1.5 border-b border-[#e4e4e7]/10 last:border-b-0"
                           >
                             <div className="flex items-center justify-between gap-2 text-xs">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span
                                   className={`font-mono truncate ${
                                     col.isSensitive
-                                      ? 'text-rose-400 line-through'
-                                      : 'text-slate-200'
+                                      ? 'text-[#f87171] line-through'
+                                      : 'text-[#e4e4e7]'
                                   }`}
                                 >
                                   {col.name}
                                 </span>
                                 {col.isPrimaryKey && (
-                                  <span className="text-[10px] font-mono text-amber-400">
+                                  <span className="text-[10px] font-mono text-[#fbbf24] font-bold">
                                     PK
                                   </span>
                                 )}
                                 {col.foreignKey && (
                                   <span
                                     title={`Foreign Key -> ${col.foreignKey.toTable}.${col.foreignKey.toColumn}`}
-                                    className="inline-flex items-center gap-0.5 text-[10px] font-mono text-sky-400"
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-mono text-[#38bdf8]"
                                   >
                                     <Link2 className="w-2.5 h-2.5" />
                                     <span>
@@ -241,20 +241,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   </span>
                                 )}
                                 {col.isSensitive && (
-                                  <span className="text-[10px] font-mono text-rose-400 font-semibold">
+                                  <span className="text-[10px] font-mono text-[#f87171] font-bold uppercase">
                                     Protected
                                   </span>
                                 )}
                               </div>
-                              <span className="font-mono text-[11px] text-slate-400 shrink-0">
+                              <span className="font-mono text-[11px] text-[#e4e4e7]/60 shrink-0">
                                 {col.type}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-400">
+                            <p className="text-[11px] text-[#e4e4e7]/65">
                               {col.description}
                             </p>
                             {col.enumValues && col.enumValues.length > 0 && (
-                              <div className="font-mono text-[10px] text-slate-400 truncate">
+                              <div className="font-mono text-[10px] text-[#38bdf8]/80 truncate">
                                 Values: {col.enumValues.join(' | ')}
                               </div>
                             )}
@@ -269,14 +269,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Protected Columns Notice */}
             {schemaContext.sensitiveColumns.length > 0 && (
-              <div className="p-3.5 rounded-lg border border-slate-800 bg-slate-950/60 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2 text-slate-300">
-                  <EyeOff className="w-4 h-4 text-amber-400 shrink-0" />
+              <div className="p-3.5 rounded-none border border-[#fbbf24]/30 bg-[#fbbf24]/[0.05] flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-[#e4e4e7]">
+                  <EyeOff className="w-4 h-4 text-[#fbbf24] shrink-0" />
                   <span>
                     Protected columns (automatically blocked from queries):
                   </span>
                 </div>
-                <span className="font-mono text-amber-300">
+                <span className="font-mono text-[#fbbf24]">
                   {schemaContext.sensitiveColumns.join(', ')}
                 </span>
               </div>
@@ -288,20 +288,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <article
                 key={entry.term}
                 aria-label={`Glossary definition for ${entry.term}`}
-                className="rounded-lg border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5"
+                className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3.5 space-y-2"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="font-mono text-xs font-semibold text-sky-300">
+                  <h3 className="font-mono text-xs font-bold text-[#38bdf8]">
                     {entry.term}
                   </h3>
-                  <span className="font-mono text-[11px] text-slate-400">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-[#e4e4e7]/60">
                     {entry.category}
                   </span>
                 </div>
-                <p className="text-xs text-slate-200 leading-relaxed">
+                <p className="text-xs text-[#e4e4e7]/85 leading-relaxed">
                   {entry.definition}
                 </p>
-                <div className="font-mono text-[11px] text-slate-300 bg-slate-900/90 p-2 rounded border border-slate-800/80 break-words">
+                <div className="font-mono text-[11px] text-[#4ade80] bg-[#121216] p-2 rounded-none border border-[#e4e4e7]/15 break-words">
                   {entry.formulaOrRule}
                 </div>
               </article>
@@ -312,12 +312,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {schemaContext.joinHints.map((hint) => (
               <div
                 key={hint.expression}
-                className="rounded-lg border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5"
+                className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] p-3.5 space-y-1.5"
               >
-                <div className="font-mono text-xs font-semibold text-sky-300">
+                <div className="font-mono text-xs font-bold text-[#38bdf8]">
                   {hint.expression}
                 </div>
-                <p className="text-xs text-slate-300">{hint.description}</p>
+                <p className="text-xs text-[#e4e4e7]/70">{hint.description}</p>
               </div>
             ))}
           </div>
@@ -326,4 +326,3 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </section>
   );
 };
-

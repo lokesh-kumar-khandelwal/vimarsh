@@ -63,14 +63,17 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
       {/* Header & Summary Strip */}
       <section
         aria-label="Self-Tests Summary"
-        className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 space-y-4"
+        className="rounded-none border border-[#e4e4e7]/15 bg-[#121216] p-5 space-y-5"
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h2 className="text-base font-semibold text-slate-100">
-              In-Browser Self-Tests &amp; Worker Seed Report
+          <div className="space-y-1.5">
+            <span className="label-mono text-[#38bdf8] block">
+              IN-BROWSER VERIFICATION HARNESS
+            </span>
+            <h2 className="font-syne font-extrabold text-2xl uppercase tracking-tight text-[#e4e4e7]">
+              SELF-TESTS &amp; WORKER SEED REPORT
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[#e4e4e7]/65 max-w-3xl leading-relaxed">
               Authoritative browser verification of the 10-step SQL Safety Engine (47 validator cases + Worker dryRun &amp; executor tests), deterministic seed guarantees, local-calendar date math, and live SQLite schema inspection. Requires no API key.
             </p>
           </div>
@@ -78,7 +81,7 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
             type="button"
             onClick={onRerunTests}
             disabled={isRunning}
-            className="inline-flex items-center gap-2 py-2 px-4 text-xs font-medium rounded-lg bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-sky-300"
+            className="inline-flex items-center gap-2 py-2 px-4 text-xs font-mono font-bold uppercase tracking-wider rounded-none bg-[#e4e4e7] text-[#0c0c0e] hover:bg-[#38bdf8] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
             <span>{isRunning ? 'Running Checks...' : 'Re-run All Checks'}</span>
@@ -86,32 +89,32 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
         </div>
 
         {/* Summary Metrics */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-800">
-          <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80">
-            <div className="text-xs text-slate-400">Total Checks Executed</div>
-            <div className="mt-1 text-xl font-semibold font-mono tabular-nums text-slate-100">
-              {totalCount}
+        <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-[#e4e4e7]/15 border border-[#e4e4e7]/15 bg-[#0c0c0e]">
+          <div className="p-4">
+            <div className="label-mono">Total Checks Executed</div>
+            <div className="mt-1 font-syne font-extrabold text-2xl tabular-nums text-[#e4e4e7]">
+              {isRunning ? '...' : totalCount}
             </div>
           </div>
-          <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80">
-            <div className="text-xs text-slate-400">Passed</div>
-            <div className="mt-1 text-xl font-semibold font-mono tabular-nums text-emerald-400">
-              {passedCount}
+          <div className="p-4">
+            <div className="label-mono">Passed</div>
+            <div className="mt-1 font-syne font-extrabold text-2xl tabular-nums text-[#4ade80]">
+              {isRunning ? '...' : passedCount}
             </div>
           </div>
-          <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80">
-            <div className="text-xs text-slate-400">Failed</div>
+          <div className="p-4">
+            <div className="label-mono">Failed</div>
             <div
-              className={`mt-1 text-xl font-semibold font-mono tabular-nums ${
-                failedCount === 0 ? 'text-slate-400' : 'text-rose-400'
+              className={`mt-1 font-syne font-extrabold text-2xl tabular-nums ${
+                failedCount === 0 ? 'text-[#e4e4e7]/50' : 'text-[#f87171]'
               }`}
             >
-              {failedCount}
+              {isRunning ? '...' : failedCount}
             </div>
           </div>
-          <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80">
-            <div className="text-xs text-slate-400">Worker Seed &amp; Setup</div>
-            <div className="mt-1 text-sm font-mono tabular-nums text-slate-200">
+          <div className="p-4">
+            <div className="label-mono">Worker Seed &amp; Setup</div>
+            <div className="mt-2 text-xs font-mono tabular-nums text-[#38bdf8]">
               {seedReport
                 ? `${seedReport.completedAtMs} ms (${seedReport.wasmSource})`
                 : 'Pending...'}
@@ -121,29 +124,29 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
 
         {/* Connection Setup Order Trace */}
         {seedReport && (
-          <div className="pt-2 border-t border-slate-800 space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          <div className="pt-3 border-t border-[#e4e4e7]/15 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#e4e4e7]/65">
               <span>
                 Worker Connection Setup Order (Anchored to Local Date:{' '}
-                <strong className="font-mono text-slate-200">
+                <strong className="font-mono text-[#e4e4e7]">
                   {seedReport.generatedForDate}
                 </strong>
                 , Earliest Order Window:{' '}
-                <strong className="font-mono text-slate-200">
+                <strong className="font-mono text-[#e4e4e7]">
                   {seedReport.earliestOrderDate}
                 </strong>
                 )
               </span>
-              <span className="font-mono text-[11px] text-emerald-400">
+              <span className="font-mono text-[11px] text-[#4ade80] font-bold">
                 PRAGMA foreign_keys = ON · PRAGMA query_only = ON
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-slate-300 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-[#38bdf8] bg-[#0c0c0e] p-2.5 rounded-none border border-[#e4e4e7]/15">
               {seedReport.setupSequence.map((step, index) => (
                 <React.Fragment key={step}>
                   <span>{step}</span>
                   {index < seedReport.setupSequence.length - 1 && (
-                    <span className="text-slate-600" aria-hidden="true">
+                    <span className="text-[#e4e4e7]/40" aria-hidden="true">
                       &rarr;
                     </span>
                   )}
@@ -153,6 +156,18 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
           </div>
         )}
       </section>
+
+      {/* Unrun State Notice */}
+      {!isRunning && totalCount === 0 && (
+        <section className="rounded-none border border-[#e4e4e7]/20 bg-[#121216] p-6 text-center space-y-2">
+          <p className="font-mono text-xs uppercase tracking-wider text-[#e4e4e7]/70">
+            Self-test suites have not been executed yet.
+          </p>
+          <p className="text-xs text-[#e4e4e7]/50">
+            Click &ldquo;Re-run All Checks&rdquo; above to run all in-browser verification suites.
+          </p>
+        </section>
+      )}
 
       {/* Suite Tables */}
       {suitesOrder.map((suiteKey) => {
@@ -164,20 +179,24 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
           <section
             key={suiteKey}
             aria-label={SUITE_TITLES[suiteKey]}
-            className="rounded-xl border border-slate-800 bg-slate-900/70 overflow-hidden"
+            className="rounded-none border border-[#e4e4e7]/15 bg-[#0c0c0e] overflow-hidden"
           >
-            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between gap-4">
+            <div className="px-5 py-3.5 border-b border-[#e4e4e7]/15 bg-[#121216] flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <ShieldCheck
-                  className={`w-4 h-4 ${
-                    suiteAllPassed ? 'text-emerald-400' : 'text-rose-400'
+                  className={`w-4 h-4 shrink-0 ${
+                    suiteAllPassed ? 'text-[#4ade80]' : 'text-[#f87171]'
                   }`}
                 />
-                <h3 className="text-sm font-semibold text-slate-100">
+                <h3 className="text-xs font-mono font-bold text-[#e4e4e7]">
                   {SUITE_TITLES[suiteKey]}
                 </h3>
               </div>
-              <span className="font-mono text-xs tabular-nums text-slate-400">
+              <span
+                className={`font-mono text-xs font-bold tabular-nums shrink-0 ${
+                  suiteAllPassed ? 'text-[#4ade80]' : 'text-[#f87171]'
+                }`}
+              >
                 {suiteCases.filter((c) => c.passed).length} / {suiteCases.length} passed
               </span>
             </div>
@@ -185,35 +204,35 @@ export const SelfTestsPanel: React.FC<SelfTestsPanelProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-slate-800 text-[11px] font-medium text-slate-400 bg-slate-950/50">
-                    <th className="py-2.5 px-4 w-24">Status</th>
-                    <th className="py-2.5 px-4">Check / Assertion</th>
-                    <th className="py-2.5 px-4">Verified Output &amp; Details</th>
+                  <tr className="border-b border-[#e4e4e7]/15 text-[10px] font-mono uppercase tracking-widest text-[#e4e4e7]/60 bg-[#0c0c0e]">
+                    <th className="py-2.5 px-4 w-24">STATUS</th>
+                    <th className="py-2.5 px-4">CHECK / ASSERTION</th>
+                    <th className="py-2.5 px-4">VERIFIED OUTPUT &amp; DETAILS</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/70 text-xs">
+                <tbody className="divide-y divide-[#e4e4e7]/10 text-xs">
                   {suiteCases.map((tc) => (
                     <tr
                       key={tc.id}
-                      className="hover:bg-slate-800/30 transition-colors"
+                      className="hover:bg-[#e4e4e7]/[0.03] transition-colors"
                     >
                       <td className="py-2.5 px-4 whitespace-nowrap align-top">
                         {tc.passed ? (
-                          <span className="inline-flex items-center gap-1.5 font-mono text-xs font-medium text-emerald-400">
+                          <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[#4ade80]">
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                             PASS
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 font-mono text-xs font-medium text-rose-400">
+                          <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[#f87171]">
                             <XCircle className="w-3.5 h-3.5 shrink-0" />
                             FAIL
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 px-4 font-medium text-slate-200 align-top">
+                      <td className="py-2.5 px-4 font-medium text-[#e4e4e7] align-top">
                         {tc.name}
                       </td>
-                      <td className="py-2.5 px-4 font-mono text-[11px] text-slate-400 tabular-nums align-top break-all">
+                      <td className="py-2.5 px-4 font-mono text-[11px] text-[#e4e4e7]/65 tabular-nums align-top break-all">
                         {tc.details}
                       </td>
                     </tr>
