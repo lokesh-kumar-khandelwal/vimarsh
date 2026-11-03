@@ -82,6 +82,31 @@ export function App() {
     }
   };
 
+  const selectAskWorkspace = () => {
+    setWorkspaceArea('ask');
+    setShowQueryHistory(false);
+    setShowDataReference(false);
+    setIsMobileNavOpen(false);
+    setAskExternalAction((prev) => ({
+      type: 'focus_ask',
+      seq: (prev?.seq ?? 0) + 1,
+    }));
+  };
+
+  const toggleQueryHistory = () => {
+    setWorkspaceArea('ask');
+    setIsMobileNavOpen(false);
+    setShowDataReference(false);
+    setShowQueryHistory((prev) => !prev);
+  };
+
+  const toggleDataReference = () => {
+    setWorkspaceArea('ask');
+    setIsMobileNavOpen(false);
+    setShowQueryHistory(false);
+    setShowDataReference((prev) => !prev);
+  };
+
   const triggerAskAction = (
     type: 'focus_ask' | 'toggle_history' | 'toggle_schema' | 'select_example',
     payload?: string
@@ -90,16 +115,11 @@ export function App() {
     setIsMobileNavOpen(false);
 
     if (type === 'focus_ask') {
-      setShowQueryHistory(false);
-      setShowDataReference(false);
-      setAskExternalAction((prev) => ({
-        type: 'focus_ask',
-        seq: (prev?.seq ?? 0) + 1,
-      }));
+      selectAskWorkspace();
     } else if (type === 'toggle_history') {
-      setShowQueryHistory((prev) => !prev);
+      toggleQueryHistory();
     } else if (type === 'toggle_schema') {
-      setShowDataReference((prev) => !prev);
+      toggleDataReference();
     } else if (type === 'select_example' && payload) {
       setAskExternalAction((prev) => ({
         type: 'select_example',
@@ -127,6 +147,10 @@ export function App() {
         workspaceArea={workspaceArea}
         onSelectWorkspaceArea={(area) => {
           setWorkspaceArea(area);
+          if (area === 'ask') {
+            setShowQueryHistory(false);
+            setShowDataReference(false);
+          }
           setIsMobileNavOpen(false);
         }}
         isMobileNavOpen={isMobileNavOpen}
@@ -220,9 +244,9 @@ export function App() {
               onResetDatabase={() => void initializeOrResetWorker(true)}
               externalAction={askExternalAction}
               showQueryHistory={showQueryHistory}
-              onToggleQueryHistory={() => setShowQueryHistory((prev) => !prev)}
+              onToggleQueryHistory={toggleQueryHistory}
               showDataReference={showDataReference}
-              onToggleDataReference={() => setShowDataReference((prev) => !prev)}
+              onToggleDataReference={toggleDataReference}
             />
           ) : (
             <div className="max-w-5xl mx-auto w-full space-y-6">

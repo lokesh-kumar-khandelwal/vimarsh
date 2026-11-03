@@ -238,11 +238,13 @@ describe('AppNavigationSidebar Navigation State & Structure', () => {
 
       onToggleQueryHistory = () => {
         this.historyToggleCount += 1;
+        this.showDataReference = false;
         this.showQueryHistory = !this.showQueryHistory;
       };
 
       onToggleDataReference = () => {
         this.dataRefToggleCount += 1;
+        this.showQueryHistory = false;
         this.showDataReference = !this.showDataReference;
       };
 
@@ -260,11 +262,9 @@ describe('AppNavigationSidebar Navigation State & Structure', () => {
             seq: this.externalActions.length + 1,
           });
         } else if (type === 'toggle_history') {
-          this.historyToggleCount += 1;
-          this.showQueryHistory = !this.showQueryHistory;
+          this.onToggleQueryHistory();
         } else if (type === 'toggle_schema') {
-          this.dataRefToggleCount += 1;
-          this.showDataReference = !this.showDataReference;
+          this.onToggleDataReference();
         } else if (type === 'select_example' && payload) {
           this.externalActions.push({
             type: 'select_example',

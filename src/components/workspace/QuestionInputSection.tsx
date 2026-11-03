@@ -104,43 +104,28 @@ export const QuestionInputSection: React.FC<QuestionInputSectionProps> = ({
               ? 'Your clarification response'
               : 'Your question'}
           </label>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={onToggleQueryHistory}
-              aria-expanded={showQueryHistory}
-              className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-[#38bdf8] hover:text-[#e4e4e7] cursor-pointer"
-            >
-              <History className="w-3.5 h-3.5" />
-              <span>
-                {showQueryHistory
-                  ? 'Hide Query History'
-                  : `Query History (${historyCount})`}
-              </span>
-            </button>
-            {hasTurns && (
-              <>
-                {pendingClarification && (
-                  <button
-                    type="button"
-                    onClick={onStartNewQuestion}
-                    disabled={isSubmitting}
-                    className="text-[11px] font-mono uppercase tracking-wider text-[#fbbf24] hover:underline cursor-pointer"
-                  >
-                    New question
-                  </button>
-                )}
+          {hasTurns && (
+            <div className="flex flex-wrap items-center gap-3">
+              {pendingClarification && (
                 <button
                   type="button"
-                  onClick={onClearConversation}
+                  onClick={onStartNewQuestion}
                   disabled={isSubmitting}
-                  className="text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/60 hover:text-[#f87171] underline cursor-pointer"
+                  className="text-[11px] font-mono uppercase tracking-wider text-[#fbbf24] hover:underline cursor-pointer"
                 >
-                  Clear conversation
+                  New question
                 </button>
-              </>
-            )}
-          </div>
+              )}
+              <button
+                type="button"
+                onClick={onClearConversation}
+                disabled={isSubmitting}
+                className="text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/60 hover:text-[#f87171] underline cursor-pointer"
+              >
+                Clear conversation
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
@@ -184,12 +169,17 @@ export const QuestionInputSection: React.FC<QuestionInputSectionProps> = ({
       <div className="pt-3 border-t border-[#e4e4e7]/15 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="label-mono">TRY AN EXAMPLE QUESTION:</span>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onToggleQueryHistory}
               aria-expanded={showQueryHistory}
-              className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/70 hover:text-[#38bdf8] underline cursor-pointer"
+              aria-pressed={showQueryHistory}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border transition-colors cursor-pointer ${
+                showQueryHistory
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.06] text-[#38bdf8] font-bold'
+                  : 'border-[#e4e4e7]/20 text-[#e4e4e7]/70 hover:text-[#38bdf8] hover:border-[#38bdf8]'
+              }`}
             >
               <History className="w-3.5 h-3.5" />
               <span>
@@ -202,7 +192,12 @@ export const QuestionInputSection: React.FC<QuestionInputSectionProps> = ({
               type="button"
               onClick={onToggleDataReference}
               aria-expanded={showDataReference}
-              className="inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-wider text-[#e4e4e7]/70 hover:text-[#38bdf8] underline cursor-pointer"
+              aria-pressed={showDataReference}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-wider rounded-none border transition-colors cursor-pointer ${
+                showDataReference
+                  ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.06] text-[#38bdf8] font-bold'
+                  : 'border-[#e4e4e7]/20 text-[#e4e4e7]/70 hover:text-[#38bdf8] hover:border-[#38bdf8]'
+              }`}
             >
               <Database className="w-3.5 h-3.5" />
               <span>

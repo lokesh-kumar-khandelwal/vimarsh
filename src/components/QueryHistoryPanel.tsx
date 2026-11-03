@@ -3,8 +3,6 @@ import {
   ArrowUpDown,
   ArrowUpRight,
   Check,
-  ChevronDown,
-  ChevronUp,
   Code2,
   Copy,
   Database,
@@ -36,7 +34,8 @@ interface QueryHistoryPanelProps {
   dbClient: DbClient;
   onLoadQuestion: (question: string) => void;
   isOpen: boolean;
-  onToggleOpen: () => void;
+  onToggleOpen?: () => void;
+  onClose?: () => void;
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -63,6 +62,7 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
   onLoadQuestion,
   isOpen,
   onToggleOpen,
+  onClose,
 }) => {
   const [history, setHistory] = useState<QueryHistoryEntry[]>(() =>
     getQueryHistory()
@@ -239,16 +239,13 @@ export const QueryHistoryPanel: React.FC<QueryHistoryPanelProps> = ({
 
           <button
             type="button"
-            onClick={onToggleOpen}
+            onClick={onClose ?? onToggleOpen}
+            aria-label="Close Query History"
             aria-expanded={isOpen}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/35 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors cursor-pointer"
           >
-            <span>{isOpen ? 'Collapse' : 'View History'}</span>
-            {isOpen ? (
-              <ChevronUp className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronDown className="w-3.5 h-3.5" />
-            )}
+            <X className="w-3.5 h-3.5" />
+            <span>Close</span>
           </button>
         </div>
       </div>

@@ -80,6 +80,9 @@ export const ClarificationEngineWorkspace: React.FC<
   const pendingAutoScrollRef = useRef<'loading' | 'response' | null>(null);
   const lastExternalSeqRef = useRef<number>(0);
 
+  const historyPanelRef = useRef<HTMLDivElement | null>(null);
+  const dataRefPanelRef = useRef<HTMLDivElement | null>(null);
+
   // Auto-scroll effect 1: Smoothly bring the loading banner into view when a question is submitted
   useEffect(() => {
     if (isSubmitting && pendingAutoScrollRef.current === 'loading') {
@@ -109,6 +112,26 @@ export const ClarificationEngineWorkspace: React.FC<
       };
     }
   }, [sessionState.turns.length, isSubmitting]);
+
+  // Auto-scroll effect 3: Smoothly bring Query History into view when opened
+  useEffect(() => {
+    if (showQueryHistory && historyPanelRef.current) {
+      const rafId = requestAnimationFrame(() => {
+        scrollToTarget(historyPanelRef.current, 'start');
+      });
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [showQueryHistory]);
+
+  // Auto-scroll effect 4: Smoothly bring Data Reference into view when opened
+  useEffect(() => {
+    if (showDataReference && dataRefPanelRef.current) {
+      const rafId = requestAnimationFrame(() => {
+        scrollToTarget(dataRefPanelRef.current, 'start');
+      });
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [showDataReference]);
 
   useEffect(() => {
     const unsubSession = sessionStore.subscribe(setSessionState);
@@ -302,22 +325,28 @@ export const ClarificationEngineWorkspace: React.FC<
       />
 
       {/* Query History Panel (Stores & Displays Recent SQL Queries, with Direct Re-run) */}
-      <QueryHistoryPanel
-        dbClient={dbClient}
-        onLoadQuestion={handleLoadQuestionFromHistory}
-        isOpen={showQueryHistory}
-        onToggleOpen={onToggleQueryHistory}
-      />
+      {showQueryHistory && (
+        <div ref={historyPanelRef} className="scroll-mt-20">
+          <QueryHistoryPanel
+            dbClient={dbClient}
+            onLoadQuestion={handleLoadQuestionFromHistory}
+            isOpen={true}
+            onClose={onToggleQueryHistory}
+          />
+        </div>
+      )}
 
       {/* Collapsible Data Reference (Schema, Join Hints & Business Glossary) */}
       {showDataReference && (
-        <Sidebar
-          schemaContext={schemaContext}
-          isLoading={isLoadingDb}
-          onResetDatabase={onResetDatabase}
-          showResetControl={false}
-          onClose={onToggleDataReference}
-        />
+        <div ref={dataRefPanelRef} className="scroll-mt-20">
+          <Sidebar
+            schemaContext={schemaContext}
+            isLoading={isLoadingDb}
+            onResetDatabase={onResetDatabase}
+            showResetControl={false}
+            onClose={onToggleDataReference}
+          />
+        </div>
       )}
 
       {/* Query Interaction & Results Timeline */}
