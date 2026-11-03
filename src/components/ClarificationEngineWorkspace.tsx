@@ -37,10 +37,10 @@ interface ClarificationEngineWorkspaceProps {
   isLoadingDb?: boolean;
   onResetDatabase: () => void;
   externalAction?: WorkspaceExternalAction | null;
-  showQueryHistory?: boolean;
-  onToggleQueryHistory?: () => void;
-  showDataReference?: boolean;
-  onToggleDataReference?: () => void;
+  showQueryHistory: boolean;
+  onToggleQueryHistory: () => void;
+  showDataReference: boolean;
+  onToggleDataReference: () => void;
 }
 
 export const ClarificationEngineWorkspace: React.FC<
@@ -53,10 +53,10 @@ export const ClarificationEngineWorkspace: React.FC<
   isLoadingDb = false,
   onResetDatabase,
   externalAction,
-  showQueryHistory: showQueryHistoryProp,
-  onToggleQueryHistory: onToggleQueryHistoryProp,
-  showDataReference: showDataReferenceProp,
-  onToggleDataReference: onToggleDataReferenceProp,
+  showQueryHistory,
+  onToggleQueryHistory,
+  showDataReference,
+  onToggleDataReference,
 }) => {
   const [sessionState, setSessionState] = useState<SessionState>(() =>
     sessionStore.getState()
@@ -67,35 +67,6 @@ export const ClarificationEngineWorkspace: React.FC<
     null
   );
   const [inputFeedback, setInputFeedback] = useState<string | null>(null);
-  const [internalShowDataRef, setInternalShowDataRef] =
-    useState<boolean>(false);
-  const [internalShowHistory, setInternalShowHistory] =
-    useState<boolean>(false);
-
-  const showQueryHistory =
-    showQueryHistoryProp !== undefined
-      ? showQueryHistoryProp
-      : internalShowHistory;
-  const showDataReference =
-    showDataReferenceProp !== undefined
-      ? showDataReferenceProp
-      : internalShowDataRef;
-
-  const handleToggleQueryHistory = () => {
-    if (onToggleQueryHistoryProp) {
-      onToggleQueryHistoryProp();
-    } else {
-      setInternalShowHistory((prev) => !prev);
-    }
-  };
-
-  const handleToggleDataReference = () => {
-    if (onToggleDataReferenceProp) {
-      onToggleDataReferenceProp();
-    } else {
-      setInternalShowDataRef((prev) => !prev);
-    }
-  };
 
   const [historyCount, setHistoryCount] = useState<number>(() =>
     getQueryHistory().length
@@ -264,10 +235,6 @@ export const ClarificationEngineWorkspace: React.FC<
         block: 'center',
       });
       questionInputRef.current?.focus();
-    } else if (externalAction.type === 'toggle_history') {
-      handleToggleQueryHistory();
-    } else if (externalAction.type === 'toggle_schema') {
-      handleToggleDataReference();
     } else if (
       externalAction.type === 'select_example' &&
       externalAction.payload
@@ -327,10 +294,10 @@ export const ClarificationEngineWorkspace: React.FC<
         schemaContext={schemaContext}
         inputFeedback={inputFeedback}
         showQueryHistory={showQueryHistory}
-        onToggleQueryHistory={handleToggleQueryHistory}
+        onToggleQueryHistory={onToggleQueryHistory}
         historyCount={historyCount}
         showDataReference={showDataReference}
-        onToggleDataReference={handleToggleDataReference}
+        onToggleDataReference={onToggleDataReference}
         questionInputRef={questionInputRef}
       />
 
@@ -339,7 +306,7 @@ export const ClarificationEngineWorkspace: React.FC<
         dbClient={dbClient}
         onLoadQuestion={handleLoadQuestionFromHistory}
         isOpen={showQueryHistory}
-        onToggleOpen={handleToggleQueryHistory}
+        onToggleOpen={onToggleQueryHistory}
       />
 
       {/* Collapsible Data Reference (Schema, Join Hints & Business Glossary) */}
@@ -349,6 +316,7 @@ export const ClarificationEngineWorkspace: React.FC<
           isLoading={isLoadingDb}
           onResetDatabase={onResetDatabase}
           showResetControl={false}
+          onClose={onToggleDataReference}
         />
       )}
 

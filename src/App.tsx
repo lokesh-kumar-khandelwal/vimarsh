@@ -92,17 +92,21 @@ export function App() {
     if (type === 'focus_ask') {
       setShowQueryHistory(false);
       setShowDataReference(false);
+      setAskExternalAction((prev) => ({
+        type: 'focus_ask',
+        seq: (prev?.seq ?? 0) + 1,
+      }));
     } else if (type === 'toggle_history') {
       setShowQueryHistory((prev) => !prev);
     } else if (type === 'toggle_schema') {
       setShowDataReference((prev) => !prev);
+    } else if (type === 'select_example' && payload) {
+      setAskExternalAction((prev) => ({
+        type: 'select_example',
+        payload,
+        seq: (prev?.seq ?? 0) + 1,
+      }));
     }
-
-    setAskExternalAction((prev) => ({
-      type,
-      payload,
-      seq: (prev?.seq ?? 0) + 1,
-    }));
   };
 
   const selectDevTool = (tab: DevToolTab) => {

@@ -46,7 +46,7 @@ export const DEVELOPER_DIAGNOSTIC_EXAMPLES: ReadonlyArray<DiagnosticStarterQuest
   ];
 
 export interface WorkspaceExternalAction {
-  type: 'focus_ask' | 'toggle_history' | 'toggle_schema' | 'select_example';
+  type: 'focus_ask' | 'select_example';
   payload?: string;
   seq: number;
 }

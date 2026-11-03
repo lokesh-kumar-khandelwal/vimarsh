@@ -8,6 +8,7 @@ import {
   EyeOff,
   Link2,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import type { SchemaContext } from '../types';
 
@@ -16,6 +17,7 @@ interface SidebarProps {
   isLoading: boolean;
   onResetDatabase: () => void;
   showResetControl?: boolean;
+  onClose?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -23,6 +25,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isLoading,
   onResetDatabase,
   showResetControl = true,
+  onClose,
 }) => {
   const [sidebarTab, setSidebarTab] = useState<'schema' | 'joins' | 'glossary'>(
     'schema'
@@ -108,17 +111,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {showResetControl && !confirmingReset && (
-          <button
-            type="button"
-            onClick={() => setConfirmingReset(true)}
-            disabled={isLoading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/40 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>Reset Sample Database</span>
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {showResetControl && !confirmingReset && (
+            <button
+              type="button"
+              onClick={() => setConfirmingReset(true)}
+              disabled={isLoading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/40 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>Reset Sample Database</span>
+            </button>
+          )}
+
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Data Reference"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7]/35 bg-[#0c0c0e] text-[#e4e4e7] hover:border-[#38bdf8] hover:text-[#38bdf8] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Close</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Explicit Confirmation Banner before resetting database */}
