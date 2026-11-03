@@ -25,6 +25,8 @@ interface AppNavigationSidebarProps {
     type: 'focus_ask' | 'toggle_history' | 'toggle_schema' | 'select_example',
     payload?: string
   ) => void;
+  showQueryHistory: boolean;
+  showDataReference: boolean;
   historyCount: number;
   tableCount: number;
   isLoading: boolean;
@@ -37,6 +39,8 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
   devToolTab,
   onSelectDevTool,
   onTriggerAskAction,
+  showQueryHistory,
+  showDataReference,
   historyCount,
   tableCount,
   isLoading,
@@ -51,6 +55,11 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
       ? 'UNRUN'
       : `${passedTestsCount}/${totalTestsCount}`;
 
+  const isAskArea = workspaceArea === 'ask';
+  const isHistoryActive = isAskArea && showQueryHistory;
+  const isDataRefActive = isAskArea && showDataReference;
+  const isAskActive = isAskArea && !showQueryHistory && !showDataReference;
+
   return (
     <div className="flex flex-col justify-between h-full gap-6">
       <div className="space-y-6">
@@ -61,6 +70,7 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
             <button
               type="button"
               onClick={() => onSelectDevTool('evaluation')}
+              aria-current={devToolTab === 'evaluation' ? 'page' : undefined}
               className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                 devToolTab === 'evaluation'
                   ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
@@ -74,6 +84,7 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
             <button
               type="button"
               onClick={() => onSelectDevTool('playground')}
+              aria-current={devToolTab === 'playground' ? 'page' : undefined}
               className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                 devToolTab === 'playground'
                   ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
@@ -87,6 +98,7 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
             <button
               type="button"
               onClick={() => onSelectDevTool('selftests')}
+              aria-current={devToolTab === 'selftests' ? 'page' : undefined}
               className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                 devToolTab === 'selftests'
                   ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
@@ -100,6 +112,7 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
             <button
               type="button"
               onClick={() => onSelectDevTool('context')}
+              aria-current={devToolTab === 'context' ? 'page' : undefined}
               className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                 devToolTab === 'context'
                   ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
@@ -113,6 +126,7 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
             <button
               type="button"
               onClick={() => onSelectDevTool('schema')}
+              aria-current={devToolTab === 'schema' ? 'page' : undefined}
               className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                 devToolTab === 'schema'
                   ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
@@ -126,6 +140,7 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
             <button
               type="button"
               onClick={() => onSelectDevTool('diagnostics')}
+              aria-current={devToolTab === 'diagnostics' ? 'page' : undefined}
               className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                 devToolTab === 'diagnostics'
                   ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
@@ -144,46 +159,60 @@ export const AppNavigationSidebar: React.FC<AppNavigationSidebarProps> = ({
               <button
                 type="button"
                 onClick={() => onTriggerAskAction('focus_ask')}
-                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold flex items-center justify-between gap-2 cursor-pointer"
+                aria-current={isAskActive ? 'page' : undefined}
+                aria-pressed={isAskActive}
+                className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                  isAskActive
+                    ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                    : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+                }`}
               >
                 <span>ASK WORKSPACE</span>
-                <MessageSquareText className="w-3.5 h-3.5 shrink-0" />
+                <MessageSquareText
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    isAskActive ? 'text-[#38bdf8]' : 'opacity-75'
+                  }`}
+                />
               </button>
 
               <button
                 type="button"
                 onClick={() => onTriggerAskAction('toggle_history')}
-                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                aria-expanded={isHistoryActive}
+                aria-pressed={isHistoryActive}
+                aria-current={isHistoryActive ? 'true' : undefined}
+                className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                  isHistoryActive
+                    ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                    : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+                }`}
               >
                 <span>QUERY HISTORY ({historyCount})</span>
-                <History className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                <History
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    isHistoryActive ? 'text-[#38bdf8]' : 'opacity-75'
+                  }`}
+                />
               </button>
 
               <button
                 type="button"
                 onClick={() => onTriggerAskAction('toggle_schema')}
-                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                aria-expanded={isDataRefActive}
+                aria-pressed={isDataRefActive}
+                aria-current={isDataRefActive ? 'true' : undefined}
+                className={`w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                  isDataRefActive
+                    ? 'border-[#e4e4e7] bg-[#e4e4e7]/[0.04] text-[#38bdf8] font-bold'
+                    : 'border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02]'
+                }`}
               >
                 <span>DATA REFERENCE ({tableCount})</span>
-                <Database className="w-3.5 h-3.5 shrink-0 opacity-75" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onSelectDevTool('evaluation')}
-                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
-              >
-                <span>EVALUATION ({GOLDEN_TEST_SUITE.length})</span>
-                <FlaskConical className="w-3.5 h-3.5 shrink-0 opacity-75" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onSelectDevTool('selftests')}
-                className="w-full text-left px-3.5 py-2.5 text-xs font-mono uppercase tracking-wider rounded-none border border-transparent text-[#e4e4e7]/65 hover:text-[#e4e4e7] hover:bg-[#e4e4e7]/[0.02] transition-colors flex items-center justify-between gap-2 cursor-pointer"
-              >
-                <span>SELF-TESTS ({selfTestCountLabel})</span>
-                <Terminal className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                <Database
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    isDataRefActive ? 'text-[#38bdf8]' : 'opacity-75'
+                  }`}
+                />
               </button>
             </nav>
 

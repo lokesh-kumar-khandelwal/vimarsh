@@ -32,6 +32,8 @@ export function App() {
   const [historyCount, setHistoryCount] = useState<number>(() =>
     getQueryHistory().length
   );
+  const [showQueryHistory, setShowQueryHistory] = useState<boolean>(false);
+  const [showDataReference, setShowDataReference] = useState<boolean>(false);
   const [askExternalAction, setAskExternalAction] =
     useState<WorkspaceExternalAction | null>(null);
 
@@ -86,6 +88,16 @@ export function App() {
   ) => {
     setWorkspaceArea('ask');
     setIsMobileNavOpen(false);
+
+    if (type === 'focus_ask') {
+      setShowQueryHistory(false);
+      setShowDataReference(false);
+    } else if (type === 'toggle_history') {
+      setShowQueryHistory((prev) => !prev);
+    } else if (type === 'toggle_schema') {
+      setShowDataReference((prev) => !prev);
+    }
+
     setAskExternalAction((prev) => ({
       type,
       payload,
@@ -131,6 +143,8 @@ export function App() {
             devToolTab={devToolTab}
             onSelectDevTool={selectDevTool}
             onTriggerAskAction={triggerAskAction}
+            showQueryHistory={showQueryHistory}
+            showDataReference={showDataReference}
             historyCount={historyCount}
             tableCount={schemaContext?.tables.length ?? 5}
             isLoading={isLoading}
@@ -150,6 +164,8 @@ export function App() {
               devToolTab={devToolTab}
               onSelectDevTool={selectDevTool}
               onTriggerAskAction={triggerAskAction}
+              showQueryHistory={showQueryHistory}
+              showDataReference={showDataReference}
               historyCount={historyCount}
               tableCount={schemaContext?.tables.length ?? 5}
               isLoading={isLoading}
@@ -199,6 +215,10 @@ export function App() {
               isLoadingDb={isLoading}
               onResetDatabase={() => void initializeOrResetWorker(true)}
               externalAction={askExternalAction}
+              showQueryHistory={showQueryHistory}
+              onToggleQueryHistory={() => setShowQueryHistory((prev) => !prev)}
+              showDataReference={showDataReference}
+              onToggleDataReference={() => setShowDataReference((prev) => !prev)}
             />
           ) : (
             <div className="max-w-5xl mx-auto w-full space-y-6">
